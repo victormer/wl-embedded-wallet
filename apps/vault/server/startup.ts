@@ -19,11 +19,18 @@ function hasPeerAddress(): boolean {
  */
 export async function startup(): Promise<void> {
   const production = process.env.NODE_ENV === 'production';
-  // The brand too: an invalid `brand.json`, or one without AA contrast, does not start in production.
-  const issues = [...validateConfig(), ...loadBrandFromEnv().issues];
+  // The brand too: an invalid `brand.json`, or one without AA contrast, does not start in production. On Vercel the
+  // build traces the brand into every route, but not into the proxy function, which runs this too: there a missing
+  // directory only warns. A route without it would render the neutral brand, and the warning says why.
+  const vercel = clientIpSource() === 'vercel';
+  const issues = [...validateConfig()];
+  for (const issue of loadBrandFromEnv().issues) {
+    if (vercel && issue.variable === 'VAULT_BRAND_DIR') console.warn(`Warning: ${issue.variable} ${issue.reason} in this function`);
+    else issues.push(issue);
+  }
   // Outside production it only warns, and only in `next dev`: tests do not load the preload. On Vercel the address
   // comes from `x-real-ip` (`CLIENT_IP_SOURCE=vercel`), and `validateConfig` already refuses a source that cannot work.
-  if (clientIpSource() !== 'vercel' && !(process.env.VERCEL === '1' && production) && !hasPeerAddress()) {
+  if (!vercel &&!(process.env.VERCEL === '1' && production) && !hasPeerAddress()) {
     const { variable, reason } = PEER_ADDRESS_ISSUE;
     if (production) issues.push(PEER_ADDRESS_ISSUE);
     else if (process.env.NODE_ENV === 'development') console.warn(`Warning: ${variable} ${reason}`);

@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../server/config', () => ({ validateConfig: () => [] }));
-vi.mock('../../server/brand', () => ({ loadBrandFromEnv: () => ({ issues: [] }) }));
+const brandIssues: { variable: string; reason: string }[] = [];
+vi.mock('../../server/brand', () => ({ loadBrandFromEnv: () => ({ issues: brandIssues }) }));
 vi.mock('../../server/store', () => ({ getStore: async () => ({}) }));
 
 const PRELOAD = fileURLToPath(new URL('../../scripts/peer-address.cjs', import.meta.url));
@@ -174,5 +175,41 @@ describe('startup peer-address check', () => {
     const { exit, errors } = await runStartup();
     expect(exit).not.toHaveBeenCalled();
     expect(errors).toEqual([]);
+  });
+
+  it('on Vercel a missing brand directory only warns: the proxy function has no traced files', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('CLIENT_IP_SOURCE', 'vercel');
+    vi.stubEnv('VERCEL', '1');
+    vi.stubEnv('VERCEL_REGION', 'fra1');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    brandIssues.splice(0, brandIssues.length, { variable: 'VAULT_BRAND_DIR', reason: 'is not an accessible directory' });
+    const { exit, errors } = await runStartup();
+    brandIssues.length = 0;
+    expect(exit).not.toHaveBeenCalled();
+    expect(errors).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^Warning: VAULT_BRAND_DIR is not an accessible directory/));
+  });
+
+  it('on Vercel an invalid brand still stops the vault', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('CLIENT_IP_SOURCE', 'vercel');
+    vi.stubEnv('VERCEL', '1');
+    vi.stubEnv('VERCEL_REGION', 'fra1');
+    brandIssues.splice(0, brandIssues.length, { variable: 'colors.light.accent', reason: 'fails AA contrast' });
+    const { exit, errors } = await runStartup();
+    brandIssues.length = 0;
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(errors).toEqual([expect.stringMatching(/^Invalid configuration: colors\.light\.accent/)]);
+  });
+
+  it('outside Vercel a missing brand directory stops the vault', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    (globalThis as { __wdkVaultPeerAddress?: boolean }).__wdkVaultPeerAddress = true;
+    brandIssues.splice(0, brandIssues.length, { variable: 'VAULT_BRAND_DIR', reason: 'is not an accessible directory' });
+    const { exit, errors } = await runStartup();
+    brandIssues.length = 0;
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(errors).toEqual([expect.stringMatching(/^Invalid configuration: VAULT_BRAND_DIR/)]);
   });
 });
