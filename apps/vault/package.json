@@ -1,0 +1,53 @@
+{
+  "name": "@wl-embedded-wallet/vault",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter @wl-embedded-wallet/recovery-tool build && NODE_OPTIONS=\"$NODE_OPTIONS --require \\\"$PWD/scripts/peer-address.cjs\\\"\" next dev -p 3201",
+    "build": "pnpm --filter @wl-embedded-wallet/recovery-tool build && next build",
+    "start": "node --env-file-if-exists=.env.local scripts/start-standalone.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "test:aa": "vitest run --config vitest.integration.config.ts",
+    "aa:stack": "node tests/aa-stack/run.mjs",
+    "test:pg": "node tests/pg/run.mjs",
+    "build:static-recovery": "node scripts/build-static-recovery.mjs"
+  },
+  "dependencies": {
+    "@noble/curves": "2.4.0",
+    "@scure/bip39": "2.4.0",
+    "@simplewebauthn/server": "14.0.3",
+    "@tetherto/wdk-utils": "1.0.0-beta.16",
+    "@tetherto/wdk-wallet-evm-erc-4337": "1.0.0-beta.24",
+    "@wl-embedded-wallet/core": "workspace:*",
+    "@wl-embedded-wallet/recovery-tool": "workspace:*",
+    "@wl-embedded-wallet/sdk": "workspace:*",
+    "abstractionkit": "0.4.0",
+    "hash-wasm": "4.12.0",
+    "jose": "6.2.15",
+    "next": "16.4.5",
+    "pg": "8.23.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "viem": "2.57.16"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/pg": "8.23.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3",
+    "vitest": "5.1.0"
+  },
+  "homepage": "https://github.com/victormer/wl-embedded-wallet#readme",
+  "bugs": {
+    "url": "https://github.com/victormer/wl-embedded-wallet/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/victormer/wl-embedded-wallet.git",
+    "directory": "apps/vault"
+  }
+}

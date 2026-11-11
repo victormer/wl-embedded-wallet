@@ -1,0 +1,30 @@
+{
+  "name": "@wl-embedded-wallet/e2e",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:e2e": "playwright test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@noble/curves": "2.4.0",
+    "@playwright/test": "1.65.0",
+    "@tetherto/wdk-utils": "1.0.0-beta.16",
+    "@types/node": "22.20.5",
+    "jose": "6.2.15",
+    "otplib": "13.6.0",
+    "qr": "0.7.2",
+    "typescript": "5.9.3",
+    "viem": "2.57.16"
+  },
+  "homepage": "https://github.com/victormer/wl-embedded-wallet#readme",
+  "bugs": {
+    "url": "https://github.com/victormer/wl-embedded-wallet/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/victormer/wl-embedded-wallet.git",
+    "directory": "e2e"
+  }
+}

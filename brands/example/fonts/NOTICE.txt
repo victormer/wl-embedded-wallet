@@ -1,0 +1,5 @@
+Inter (Regular, Medium, SemiBold and Bold), WOFF2 builds.
+
+Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter)
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is available with a FAQ at: https://openfontlicense.org

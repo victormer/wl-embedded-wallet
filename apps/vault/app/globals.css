@@ -1,0 +1,349 @@
+/*
+ * Vault tokens.
+ *
+ * Brand: the ones in this first block are replaced by the `brand.json` stylesheet (`server/brand.ts`, served at /brand/).
+ * Here, the neutral brand's values; a test checks that they match `DEFAULT_PALETTES`.
+ * Notices: fixed scale, the same for every brand, and always with text and icon. The brand accent never
+ * means state or warning: it lives in the primary button, the current step and selection, links and focus.
+ */
+:root {
+  color-scheme: light dark;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --radius: 10px;
+  --bg: #f3f4f6;
+  --surface: #ffffff;
+  --text: #15181e;
+  --muted: #575d69;
+  --border: #d9dce2;
+  --accent: #2f3d55;
+  --accent-text: #ffffff;
+  --accent-ink: #2f3d55;
+
+  /* True yellow (hue ≈50°): far from brand oranges such as #FCA311 (37°). */
+  --caution: #594b00;
+  --caution-bg: #fefbe3;
+  --caution-line: #e8d77a;
+  --caution-icon: #a08600;
+  --danger: #8f1d1d;
+  --danger-bg: #fdf1f1;
+  --danger-line: #f1c2c2;
+  --danger-icon: #c02626;
+  --success: #14532d;
+  --success-bg: #effaf3;
+  --success-line: #bfe3cc;
+  --success-icon: #15803d;
+  --shadow: 0 1px 2px rgb(16 24 40 / 0.04), 0 8px 24px -12px rgb(16 24 40 / 0.14);
+
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121418;
+    --surface: #1b1e24;
+    --text: #eceef2;
+    --muted: #a3a9b5;
+    --border: #30353e;
+    --accent: #b4c2dc;
+    --accent-text: #121418;
+    --accent-ink: #b4c2dc;
+
+    --caution: #f3e38e;
+    --caution-bg: #25220a;
+    --caution-line: #57501a;
+    --caution-icon: #e2cb3a;
+    --danger: #f6b4b4;
+    --danger-bg: #2c1717;
+    --danger-line: #5c2a2a;
+    --danger-icon: #f07171;
+    --success: #a7e3bd;
+    --success-bg: #12261a;
+    --success-line: #24513a;
+    --success-icon: #4ccf7f;
+    --shadow: none;
+  }
+}
+
+/* Derived from the brand tokens: not configured separately. */
+:root {
+  --surface-2: color-mix(in srgb, var(--text) 4.5%, var(--surface));
+  --ground-2: color-mix(in srgb, var(--text) 6%, var(--bg));
+  --line-strong: color-mix(in srgb, var(--text) 46%, var(--surface));
+  --accent-hover: color-mix(in srgb, var(--accent) 86%, var(--text));
+  --radius-inner: max(0px, calc(var(--radius) - 3px));
+}
+
+* { box-sizing: border-box; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.55 var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection { background: color-mix(in srgb, var(--accent) 32%, transparent); color: var(--text); }
+:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
+/* On the accent fill, a ring of the same color would read as a thicker button. */
+.button:not(.button-secondary):focus-visible { outline-color: var(--text); }
+
+h1 { margin: 0; font-size: 22px; font-weight: 700; line-height: 1.25; letter-spacing: -0.015em; text-wrap: balance; }
+h2 { margin: 0; font-size: 16px; font-weight: 650; line-height: 1.35; letter-spacing: -0.005em; }
+p { margin: 0; text-wrap: pretty; }
+.muted { color: var(--muted); font-size: 14px; }
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Frame: brand header, screen and footer. The popup is 480 px wide. The logo aligns with the screen's content. */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: calc(100% - 24px);
+  max-width: 496px;
+  min-height: 64px;
+  margin: 0 auto;
+  padding: 16px 22px 8px;
+}
+.brand-logo { display: block; width: auto; height: 24px; max-width: 200px; object-fit: contain; }
+.brand-name { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: calc(100% - 24px);
+  max-width: 496px;
+  margin: 4px auto 24px;
+  padding: 24px 22px 26px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) + 4px);
+  box-shadow: var(--shadow);
+}
+
+.site-footer { width: 100%; max-width: 520px; margin: auto auto 0; padding: 4px 24px 24px; }
+.site-footer nav { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 20px; font-size: 13px; }
+
+.stack, .panel { display: flex; flex-direction: column; gap: 12px; }
+.panel { margin-top: 6px; padding-top: 22px; border-top: 1px solid var(--border); }
+
+/* Data: label on top, read-only value on a background distinct from that of editable fields. */
+.field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.label { color: var(--muted); font-size: 13px; font-weight: 500; }
+.value {
+  display: block;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-inner);
+  overflow-wrap: anywhere;
+}
+code.value, .value-pre, .value-code { font-family: var(--mono); font-size: 13px; line-height: 1.5; }
+.value-strong { font-weight: 650; }
+.value-pre { margin: 0; max-height: 220px; overflow: auto; white-space: pre-wrap; }
+.value-empty { color: var(--muted); font-size: 14px; }
+/* Each call of a UserOperation: to, amount and data, each with its label. */
+.call { display: grid; gap: 4px; margin: 0; padding: 2px 0 2px 12px; border-left: 1px solid var(--border); }
+.call dt { font-size: 12px; }
+.call dt:not(:first-child) { margin-top: 6px; }
+.call dd { margin: 0; min-width: 0; }
+/* The recovery code: shown only once and copied whole. Overrides `code.value`. */
+.value.value-code {
+  padding: 18px 14px;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-align: center;
+  border: 1px dashed var(--line-strong);
+  user-select: all;
+}
+
+.input {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-inner);
+  transition: border-color 150ms ease-out;
+}
+.input:hover { border-color: color-mix(in srgb, var(--text) 64%, var(--surface)); }
+.input:focus-visible { border-color: var(--accent-ink); outline-offset: 1px; }
+.input-code { font-family: var(--mono); letter-spacing: 0.04em; text-transform: uppercase; }
+textarea.input { font-family: var(--mono); font-size: 13px; resize: vertical; }
+textarea.input::placeholder { font-family: var(--font-sans); font-size: 14px; }
+/* Custom file picker: the native input covers the control, transparent, and keeps focus and keyboard handling. */
+.file-picker {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 8px;
+  font-size: 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-inner);
+}
+.file-picker:hover { border-color: color-mix(in srgb, var(--text) 64%, var(--surface)); }
+.file-picker:has(.file-input:focus-visible) { border-color: var(--accent-ink); outline: 2px solid var(--accent-ink); outline-offset: 1px; }
+.file-input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.file-button {
+  flex: none;
+  padding: 7px 12px;
+  background: var(--surface-2);
+  font-weight: 600;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-inner);
+}
+.file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+select.input { cursor: pointer; }
+
+.button {
+  min-height: 44px;
+  padding: 10px 18px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font: inherit;
+  font-weight: 650;
+  line-height: 1.3;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background-color 150ms ease-out, border-color 150ms ease-out, transform 100ms ease-out;
+}
+.button:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.button:active:not(:disabled) { transform: translateY(1px); }
+.button:disabled { background: var(--surface-2); color: var(--muted); border-color: var(--border); cursor: not-allowed; }
+.button-secondary { background: var(--surface); color: var(--text); border-color: var(--line-strong); }
+.button-secondary:hover:not(:disabled) { background: var(--surface-2); border-color: var(--line-strong); }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.actions .button { flex: 1 1 auto; min-width: min(180px, 100%); }
+.link { color: var(--accent-ink); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.link:hover { text-decoration-thickness: 2px; }
+
+/* Notices. The scale is fixed: see the opening comment. */
+.note {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 13px;
+  font-size: 14px;
+  line-height: 1.5;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-inner);
+}
+.note-text { min-width: 0; }
+.note-icon { flex: none; width: 18px; height: 18px; margin-top: 1px; color: var(--muted); }
+.note-warn { color: var(--caution); background: var(--caution-bg); border-color: var(--caution-line); }
+.note-warn .note-icon { color: var(--caution-icon); }
+.note-error { color: var(--danger); background: var(--danger-bg); border-color: var(--danger-line); }
+.note-error .note-icon { color: var(--danger-icon); }
+.note-ok { color: var(--success); background: var(--success-bg); border-color: var(--success-line); }
+.note-ok .note-icon { color: var(--success-icon); }
+/* Text in the text color: `muted` is only validated on background and surface, not on their tints. */
+.note-working { align-items: center; }
+.note-working .spinner { color: var(--muted); }
+.spinner {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0 1px;
+  border: 2px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.check { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; cursor: pointer; }
+.check input { flex: none; width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--accent); cursor: pointer; }
+
+/* Enrollment steps. */
+/* Equal columns while the labels fit; on a narrow popup the longest label ("Encryption") keeps its width instead of being cut. */
+.steps { display: grid; grid-template-columns: repeat(5, minmax(min-content, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; color: var(--muted); font-size: 12px; }
+.steps li { white-space: nowrap; }
+.steps li::before { content: ''; display: block; height: 4px; margin-bottom: 7px; background: var(--border); border-radius: 2px; transition: background-color 200ms ease-out; }
+.steps li.done { color: var(--text); }
+/* Neutral: the accent is for action, never for a state. Position is read from contrast and weight. */
+.steps li.done::before { background: var(--line-strong); }
+.steps li.current { color: var(--text); font-weight: 650; }
+.steps li.current::before { background: var(--text); }
+
+/* Kit delivery: first the tool, then the kit. */
+.delivery { display: flex; flex-direction: column; gap: 20px; margin: 0; padding: 0; list-style: none; }
+.delivery-title { font-weight: 650; }
+.delivery-locked .delivery-title { color: var(--muted); }
+
+/* Recover and relink tabs: segmented control, above the screen. */
+.tabs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 4px;
+  width: calc(100% - 24px);
+  max-width: 496px;
+  margin: 4px auto 8px;
+  padding: 4px;
+  background: var(--ground-2);
+  border-radius: var(--radius);
+}
+.tab {
+  min-height: 38px;
+  padding: 6px 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.25;
+  border: 1px solid transparent;
+  border-radius: var(--radius-inner);
+  cursor: pointer;
+  transition: background-color 150ms ease-out, color 150ms ease-out;
+}
+.tab:hover { background: color-mix(in srgb, var(--surface) 50%, transparent); }
+.tab-current { background: var(--surface); color: var(--text); font-weight: 650; border-color: var(--border); box-shadow: 0 1px 2px rgb(16 24 40 / 0.06); }
+/* In dark mode the surface is darker than the track: the current tab is lightened so it does not read inverted. */
+@media (prefers-color-scheme: dark) {
+  .tab-current { background: color-mix(in srgb, var(--text) 12%, var(--surface)); border-color: var(--line-strong); }
+}
+
+/* A long hash or address must not overflow the screen on mobile. */
+.muted code { font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; }
+
+/* On mobile, the code fits on one line. */
+@media (max-width: 420px) {
+  .value.value-code { padding-inline: 8px; font-size: 14px; letter-spacing: 0.02em; }
+  /* An address (42 characters) on one line, so it can be compared. */
+  code.value { padding-inline: 8px; font-size: 12px; letter-spacing: -0.01em; }
+  /* Without indentation, each call's address also fits on one line. */
+  .call { padding-left: 0; border-left: 0; }
+}
+
+@media (min-width: 600px) {
+  .brand { padding: 24px 32px 8px; }
+  .screen { padding: 30px 32px 32px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+  .spinner { animation: none; border-color: currentColor; border-top-color: transparent; }
+}

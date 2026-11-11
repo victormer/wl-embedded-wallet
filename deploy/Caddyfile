@@ -1,0 +1,6 @@
+# Example TLS proxy for the `tls` profile of compose.yaml (docs/DEPLOYMENT.md#domain-and-tls).
+# Caddy obtains the certificate for VAULT_DOMAIN, whose DNS must point to this machine.
+{$VAULT_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy vault:3000
+}

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="__CSP__">
+<meta name="referrer" content="no-referrer">
+<title>Recover the wallet offline</title>
+<style>__CSS__</style>
+</head>
+<body>
+<main class="screen" data-testid="offline-tool">
+  <h1>Recover the wallet offline</h1>
+  <p>With your emergency kit and your recovery code, this page recovers your seed on this device. It does not use the network, your passkey, or the server.</p>
+  <p class="note note-warn">Anyone who has your kit and your code has your funds. Use this page on a trusted device, preferably offline.</p>
+  <form class="stack" id="form">
+    <label class="field">
+      <span class="label">Emergency kit</span>
+      <input class="input" type="file" accept="application/json,.json" id="kit" data-testid="offline-kit-file">
+    </label>
+    <label class="field">
+      <span class="label">Recovery code</span>
+      <input class="input input-code" autocomplete="off" spellcheck="false" id="code" data-testid="offline-code">
+    </label>
+    <button class="button" type="submit" id="submit" data-testid="offline-submit">Decrypt and check</button>
+  </form>
+  <p class="note" id="working" role="status" hidden data-testid="offline-working">Decrypting on this device. This may take a few seconds.</p>
+  <p class="note note-error" id="error" role="alert" hidden data-testid="offline-error"></p>
+  <section class="stack" id="result" hidden data-testid="offline-result">
+    <p class="note" id="verdict" role="status" data-testid="offline-verdict"></p>
+    <div class="field">
+      <span class="label">Owner derived from the seed</span>
+      <code class="value" id="owner" data-testid="offline-owner"></code>
+      <span class="muted" id="owner-check" data-testid="offline-owner-check"></span>
+    </div>
+    <div class="field">
+      <span class="label">Safe computed from that owner</span>
+      <code class="value" id="safe" data-testid="offline-safe"></code>
+      <span class="muted" id="safe-check" data-testid="offline-safe-check"></span>
+    </div>
+    <section class="stack" id="seed-panel" hidden>
+      <p class="note note-warn">The seed gives full control over your funds. No one will ever ask you for it. Make sure no one can see your screen.</p>
+      <div class="actions">
+        <button class="button button-secondary" type="button" id="reveal" data-testid="offline-reveal">Show the seed</button>
+        <button class="button button-secondary" type="button" id="hide" hidden data-testid="offline-hide">Hide</button>
+      </div>
+      <code class="value value-code" id="seed" hidden data-testid="offline-seed"></code>
+    </section>
+  </section>
+</main>
+<script>__JS__</script>
+</body>
+</html>

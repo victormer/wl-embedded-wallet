@@ -1,0 +1,109 @@
+# Full stack with the bundled Postgres: see docs/DEPLOYMENT.md#start-with-the-bundled-postgres.
+# With an external Postgres, skip this file and use `docker run` with `DATABASE_URL`
+# (docs/DEPLOYMENT.md#external-postgres).
+name: wl-embedded-wallet
+
+services:
+  postgres:
+    image: postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: vault
+      POSTGRES_DB: vault
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Missing POSTGRES_PASSWORD. Generate the environment with scripts/generate-secrets.mjs}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # Over TCP: while it initializes, the image listens only on the Unix socket.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "vault", "-d", "vault"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  vault:
+    image: ${VAULT_IMAGE:-wl-embedded-wallet-vault:local}
+    build:
+      context: .
+      dockerfile: apps/vault/Dockerfile
+    restart: unless-stopped
+    init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MASTER_KEY: ${MASTER_KEY:?Missing MASTER_KEY}
+      MANIFEST_SIGNING_KEY: ${MANIFEST_SIGNING_KEY:?Missing MANIFEST_SIGNING_KEY}
+      # Exactly one of these two. The vault checks this at startup.
+      HANDOFF_JWKS_URL: ${HANDOFF_JWKS_URL:-}
+      HANDOFF_PUBLIC_KEY: ${HANDOFF_PUBLIC_KEY:-}
+      HANDOFF_ISSUER: ${HANDOFF_ISSUER:?Missing HANDOFF_ISSUER}
+      HANDOFF_AUDIENCE: ${HANDOFF_AUDIENCE:-}
+      HANDOFF_JWKS_CACHE_SECONDS: ${HANDOFF_JWKS_CACHE_SECONDS:-}
+      HANDOFF_JWKS_COOLDOWN_SECONDS: ${HANDOFF_JWKS_COOLDOWN_SECONDS:-}
+      HANDOFF_JWKS_MAX_STALE_SECONDS: ${HANDOFF_JWKS_MAX_STALE_SECONDS:-}
+      VAULT_SERVICE_TOKEN: ${VAULT_SERVICE_TOKEN:?Missing VAULT_SERVICE_TOKEN}
+      ORIGIN: ${ORIGIN:?Missing ORIGIN}
+      RP_ID: ${RP_ID:?Missing RP_ID}
+      ALLOWED_APP_ORIGINS: ${ALLOWED_APP_ORIGINS:-}
+      DATABASE_URL: postgres://vault:${POSTGRES_PASSWORD}@postgres:5432/vault
+      DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-10}
+      AA_CHAINS: ${AA_CHAINS:-}
+      RPC_ALLOWED_HOSTS: ${RPC_ALLOWED_HOSTS:-}
+      VAULT_BRAND_NAME: ${VAULT_BRAND_NAME:-}
+      # Brand directory mounted below, containing its brand.json. Empty: the neutral brand. See docs/BRANDING.md.
+      VAULT_BRAND_DIR: ${VAULT_BRAND_DIR:-}
+      ALLOW_INSECURE_LOCAL: ${ALLOW_INSECURE_LOCAL:-}
+      # Rate limits and sponsorship caps. Empty: the defaults (docs/DEPLOYMENT.md#environment-variables).
+      # Behind a proxy (the `tls` profile, or one on the host), set TRUSTED_PROXIES to its address or subnet:
+      # otherwise every client is counted as the proxy's address.
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      RATE_LIMITS: ${RATE_LIMITS:-}
+      SHARE_A_WINDOW_SECONDS: ${SHARE_A_WINDOW_SECONDS:-}
+      SHARE_A_MAX_PER_SESSION: ${SHARE_A_MAX_PER_SESSION:-}
+      SHARE_A_MAX_PER_USER: ${SHARE_A_MAX_PER_USER:-}
+      RECOVERY_CHALLENGE_MAX_LIVE: ${RECOVERY_CHALLENGE_MAX_LIVE:-}
+      AA_MAX_VERIFICATION_GAS_LIMIT: ${AA_MAX_VERIFICATION_GAS_LIMIT:-}
+      AA_MAX_CALL_GAS_LIMIT: ${AA_MAX_CALL_GAS_LIMIT:-}
+      AA_MAX_PRE_VERIFICATION_GAS: ${AA_MAX_PRE_VERIFICATION_GAS:-}
+      AA_MAX_PAYMASTER_VERIFICATION_GAS_LIMIT: ${AA_MAX_PAYMASTER_VERIFICATION_GAS_LIMIT:-}
+      AA_MAX_PAYMASTER_POST_OP_GAS_LIMIT: ${AA_MAX_PAYMASTER_POST_OP_GAS_LIMIT:-}
+      AA_MAX_FEE_PER_GAS: ${AA_MAX_FEE_PER_GAS:-}
+      AA_FEE_MULTIPLIER_PERCENT: ${AA_FEE_MULTIPLIER_PERCENT:-}
+      AA_DEPLOYMENT_RETRY_SECONDS: ${AA_DEPLOYMENT_RETRY_SECONDS:-}
+    ports:
+      # Bound to localhost only: TLS is terminated by the proxy.
+      - "127.0.0.1:${VAULT_PORT:-3000}:3000"
+    # The brand, without rebuilding the image: the example brand, or your own directory, read-only.
+    # Uncomment and set VAULT_BRAND_DIR=/brand in .env:
+    # volumes:
+    #   - ./brands/example:/brand:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  # TLS on your own domain: docker compose --profile tls up -d (docs/DEPLOYMENT.md#domain-and-tls)
+  caddy:
+    profiles: [tls]
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    restart: unless-stopped
+    depends_on:
+      vault:
+        condition: service_healthy
+    environment:
+      VAULT_DOMAIN: ${VAULT_DOMAIN:-}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:

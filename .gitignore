@@ -1,0 +1,16 @@
+node_modules/
+.next/
+data/
+.env*
+!.env.example
+test-results/
+playwright-report/
+next-env.d.ts
+*.tsbuildinfo
+.next-e2e/
+e2e/.run/
+packages/recovery-tool/dist/
+apps/vault/dist/
+apps/vault/.brand-build-*/
+.vercel/
+AGENTS.md

@@ -1,0 +1,23 @@
+# Keeps secrets, local data, tests, docs and deployment files out of the vault image build context
+# (docs/DEPLOYMENT.md#build-the-image).
+**/.env*
+**/node_modules
+**/.next*
+**/data
+**/*.tsbuildinfo
+**/test-results
+**/playwright-report
+.git
+.claude
+e2e
+docs
+deploy
+examples/demo
+apps/vault/tests
+apps/vault/vitest*.ts
+packages/*/tests
+compose.yaml
+README.md
+# The brand is mounted at runtime: it is not part of the image.
+brands
+**/.impeccable

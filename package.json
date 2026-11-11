@@ -1,0 +1,33 @@
+{
+  "name": "wl-embedded-wallet",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.5.1",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "pnpm -r --parallel --if-present run dev",
+    "build": "pnpm -r --if-present run build",
+    "test": "pnpm -r --if-present run test",
+    "test:e2e": "pnpm --filter ./e2e test:e2e",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "setup:env": "node scripts/setup-env.mjs",
+    "test:aa": "pnpm --filter ./apps/vault test:aa",
+    "aa:stack": "pnpm --filter ./apps/vault aa:stack",
+    "test:pg": "pnpm --filter ./apps/vault test:pg && pnpm --filter ./examples/demo test:pg",
+    "test:pg:demo": "pnpm --filter ./examples/demo test:pg",
+    "test:e2e:image": "E2E_VAULT_IMAGE=1 pnpm --filter ./e2e test:e2e",
+    "test:e2e:pg": "pnpm --filter ./apps/vault exec node tests/pg/run.mjs pnpm -w test:e2e"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/victormer/wl-embedded-wallet#readme",
+  "bugs": {
+    "url": "https://github.com/victormer/wl-embedded-wallet/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/victormer/wl-embedded-wallet.git"
+  }
+}

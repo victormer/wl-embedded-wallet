@@ -1,0 +1,35 @@
+{
+  "name": "@wl-embedded-wallet/sdk",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/victormer/wl-embedded-wallet#readme",
+  "bugs": {
+    "url": "https://github.com/victormer/wl-embedded-wallet/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/victormer/wl-embedded-wallet.git",
+    "directory": "packages/sdk"
+  },
+  "type": "module",
+  "exports": {
+    "./client": "./src/client/index.ts",
+    "./server": "./src/server/index.ts",
+    "./protocol": "./src/protocol.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@noble/curves": "2.4.0",
+    "@wl-embedded-wallet/core": "workspace:*",
+    "jose": "6.2.15"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "typescript": "5.9.3",
+    "vitest": "5.1.0"
+  }
+}

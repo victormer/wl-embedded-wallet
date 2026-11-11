@@ -1,0 +1,27 @@
+Inter Tight (Regular, Medium, SemiBold and Bold) and JetBrains Mono (Regular and Medium), WOFF2 builds.
+
+Inter Tight
+Copyright 2022 The Inter Project Authors (https://github.com/rsms/inter-tight)
+Inter Tight is the tightly spaced display version of Inter (https://github.com/rsms/inter).
+
+JetBrains Mono
+Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
+
+These Font Software are licensed under the SIL Open Font License, Version 1.1.
+The license text is in OFL.txt next to this file, and is available with a FAQ at: https://openfontlicense.org
+
+Source
+The files are static instances generated from the variable builds published in the Google Fonts repository
+(https://github.com/google/fonts), commit c30b221beb0c1da59d563feb91ec8656a1fa972a:
+  ofl/intertight/InterTight[wght].ttf       (Version 3.004; git blob 7d64212163dc15e7f3de5487672668dbde589365)
+  ofl/jetbrainsmono/JetBrainsMono[wght].ttf (Version 2.211; git blob aa310be8b717fe3774f9444dd89d5f4101cc6d10)
+
+Modifications
+With fontTools 4.68.0: each file was instanced at a single weight (wght 400, 500, 600 or 700), subset to Latin,
+Latin-1, Latin Extended-A/B, Latin Extended Additional, General Punctuation, Currency Symbols, U+2122, arrows
+U+2190-2199 and U+2212 (layout features kept: kern, calt, ccmp, locl, mark, mkmk, case, tnum, pnum, zero, frac,
+numr, dnom, salt, cpsp, ss01-ss05 and cv01-cv11 where present), and saved as WOFF2. The name table was updated to
+the static style names. No glyph was redrawn.
+
+These files are Modified Versions under the SIL Open Font License only in that sense (instancing, subsetting and
+format conversion). Neither upstream OFL.txt declares a Reserved Font Name, so the original family names are kept.

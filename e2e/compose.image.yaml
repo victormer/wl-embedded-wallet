@@ -1,0 +1,8 @@
+# Only for `pnpm test:e2e:image`: the container reaches the host's `anvil` chains.
+services:
+  vault:
+    extra_hosts:
+      - "rpc.localhost:host-gateway"
+    # The example brand, mounted as a customer would: without rebuilding the image.
+    volumes:
+      - ./brands/example:/brand:ro

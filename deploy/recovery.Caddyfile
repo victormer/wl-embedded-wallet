@@ -1,0 +1,13 @@
+# Example: the static recovery page on an origin valid for the RP ID, without the vault.
+# Generate the files with `pnpm --filter ./apps/vault build:static-recovery` (docs/DEPLOYMENT.md#static-recovery-page)
+# and serve them from `root`.
+{$RECOVERY_DOMAIN} {
+	root * /srv/recovery
+	file_server
+	header {
+		# A worker's CSP comes from the response that serves its script: a `<meta>` tag does not cover it.
+		Content-Security-Policy "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'none'; worker-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; require-trusted-types-for 'script'; trusted-types default; frame-ancestors 'none'"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+	}
+}

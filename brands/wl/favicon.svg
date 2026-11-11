@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
+<defs>
+<linearGradient id="wl-seam-favicon" x1="46.1" y1="46" x2="60.6" y2="18" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#3FD8F0"/>
+<stop offset="1" stop-color="#2E4BFF"/>
+</linearGradient>
+</defs>
+<rect width="64" height="64" rx="8" fill="#0B0B0C"/>
+<style>.edge{display:none}@media (prefers-color-scheme: dark){.edge{display:inline}}</style>
+<rect class="edge" x="1" y="1" width="62" height="62" rx="7" fill="none" stroke="#FFFFFF" stroke-opacity="0.16" stroke-width="2"/>
+<path d="M23.75 37.54 27.24 46 34.1 46 41.1 18 34.4 18 29.99 35.63 23.75 20.46 17.51 35.63 13.1 18 6.4 18 13.4 46 20.26 46Z" fill="#F4F3EF"/>
+<path d="M52.6 18 46.1 18 46.1 46 58.6 46 58.6 39.5 52.6 39.5Z" fill="url(#wl-seam-favicon)"/>
+</svg>

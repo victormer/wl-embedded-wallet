@@ -1,0 +1,17 @@
+# Only used by `vercel deploy` from a working tree (Git deployments clone the repository). Without it the CLI would
+# upload local secrets and databases: it does not read `.gitignore`.
+**/.env*
+!**/.env.example
+**/data
+**/.next
+**/.next-*
+**/node_modules
+**/*.tsbuildinfo
+**/test-results
+**/playwright-report
+e2e/.run
+packages/recovery-tool/dist
+apps/vault/dist
+apps/vault/.brand-build-*
+.claude
+**/.impeccable

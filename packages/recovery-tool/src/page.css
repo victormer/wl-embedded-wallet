@@ -1,0 +1,26 @@
+:root { color-scheme: light dark; --bg: #f6f5f1; --surface: #fff; --text: #1e2421; --muted: #5e6862; --border: #d9dbd4; --accent: #1f5f4a; --accent-text: #fff; --error: #a4322a; --error-bg: #fbeeec; --warn: #7a5512; --warn-bg: #fbf3e0; --ok: #1f5f4a; --ok-bg: #e8f3ee; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+@media (prefers-color-scheme: dark) { :root { --bg: #141715; --surface: #1d211f; --text: #eceee9; --muted: #a0a9a3; --border: #343a36; --accent: #5dbb9a; --accent-text: #0f1512; --error: #f0908a; --error-bg: #3a1f1d; --warn: #e6c37a; --warn-bg: #352b16; --ok: #5dbb9a; --ok-bg: #18302a; } }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+.screen { display: flex; flex-direction: column; gap: 16px; max-width: 560px; margin: 0 auto; padding: 24px 16px 40px; }
+h1 { margin: 0; font-size: 22px; line-height: 1.25; }
+p { margin: 0; }
+.muted { color: var(--muted); font-size: 14px; }
+.stack { display: flex; flex-direction: column; gap: 12px; }
+.field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.label { color: var(--muted); font-size: 13px; }
+.value { display: block; padding: 10px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow-wrap: anywhere; font-family: var(--mono); font-size: 13px; }
+.value-code { font-size: 15px; font-weight: 600; }
+.input { width: 100%; padding: 10px 12px; background: var(--surface); color: inherit; font: inherit; border: 1px solid var(--border); border-radius: 8px; }
+.input-code { font-family: var(--mono); text-transform: uppercase; }
+.input:focus-visible, .button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.button { padding: 11px 16px; background: var(--accent); color: var(--accent-text); font: inherit; font-weight: 600; border: 1px solid var(--accent); border-radius: 8px; cursor: pointer; }
+.button:disabled { opacity: .5; cursor: not-allowed; }
+.button-secondary { background: transparent; color: var(--text); border-color: var(--border); }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.actions .button { flex: 1 1 140px; }
+.note { padding: 10px 12px; font-size: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+.note-error { color: var(--error); background: var(--error-bg); border-color: transparent; }
+.note-warn { color: var(--warn); background: var(--warn-bg); border-color: transparent; }
+.note-ok { color: var(--ok); background: var(--ok-bg); border-color: transparent; }
