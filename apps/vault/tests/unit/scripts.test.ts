@@ -125,3 +125,24 @@ describe('generate-secrets', () => {
     }
   });
 });
+
+describe('vercel-aa-chains', () => {
+  const example = readFileSync(resolve(__dirname, '../../../../deploy/vercel/aa-chains.example.json'), 'utf8');
+  const filled = example.replaceAll('<PIMLICO_API_KEY>', 'pim_test').replaceAll('<SPONSORSHIP_POLICY_ID>', 'sp_test');
+
+  it('the example, once filled in, passes the script and the vault’s own validation', async () => {
+    const { summarize } = await import('../../../../scripts/vercel-aa-chains.mjs');
+    expect(summarize(filled).problems).toEqual([]);
+    expect(summarize(example).problems).toEqual(['still has a <PLACEHOLDER> from the example']);
+    const issues = validateConfig({ AA_CHAINS: JSON.stringify(JSON.parse(filled)) }, true).filter((issue) => issue.variable.startsWith('AA_CHAINS'));
+    expect(issues).toEqual([]);
+  });
+
+  it('reports a JSON error by line and column, without quoting the input', async () => {
+    const { summarize } = await import('../../../../scripts/vercel-aa-chains.mjs');
+    const broken = '{\n  "1": {\n    "bundlerUrl": "https://bundler.example/rpc?apikey=SECRET-VALUE"\n    "sponsorTransactions": true\n  }\n}';
+    const { problems } = summarize(broken);
+    expect(problems).toEqual([expect.stringMatching(/^not valid JSON at line 4, column \d+$/)]);
+    expect(problems.join(' ')).not.toContain('SECRET');
+  });
+});

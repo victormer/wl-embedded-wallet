@@ -14,3 +14,4 @@ apps/vault/dist/
 apps/vault/.brand-build-*/
 .vercel/
 AGENTS.md
+.secrets/

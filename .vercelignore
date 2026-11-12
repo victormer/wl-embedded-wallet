@@ -15,3 +15,4 @@ apps/vault/dist
 apps/vault/.brand-build-*
 .claude
 **/.impeccable
+.secrets

@@ -6,7 +6,7 @@ import { sealTotpSecret } from '@/server/totp';
 
 export const runtime = 'nodejs';
 
-const ISSUER = 'Acme Wallet Demo';
+const ISSUER = 'WL Embedded Wallet Demo';
 
 export async function POST(request: Request): Promise<Response> {
   const rejected = rejectForeignOrigin(request);

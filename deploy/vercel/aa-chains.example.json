@@ -1,0 +1,30 @@
+{
+  "11155111": {
+    "name": "Ethereum Sepolia",
+    "rpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
+    "bundlerUrl": "https://api.pimlico.io/v2/11155111/rpc?apikey=<PIMLICO_API_KEY>",
+    "paymasterUrl": "https://api.pimlico.io/v2/11155111/rpc?apikey=<PIMLICO_API_KEY>",
+    "paymasterContext": { "sponsorshipPolicyId": "<SPONSORSHIP_POLICY_ID>" },
+    "sponsorTransactions": true,
+    "limits": { "maxFeePerGas": "100000000000" }
+  },
+  "80002": {
+    "name": "Polygon Amoy",
+    "nativeCurrency": "POL",
+    "rpcUrl": "https://polygon-amoy-bor-rpc.publicnode.com",
+    "bundlerUrl": "https://api.pimlico.io/v2/80002/rpc?apikey=<PIMLICO_API_KEY>",
+    "paymasterUrl": "https://api.pimlico.io/v2/80002/rpc?apikey=<PIMLICO_API_KEY>",
+    "paymasterContext": { "sponsorshipPolicyId": "<SPONSORSHIP_POLICY_ID>" },
+    "sponsorTransactions": true,
+    "limits": { "maxFeePerGas": "500000000000" }
+  },
+  "84532": {
+    "name": "Base Sepolia",
+    "rpcUrl": "https://base-sepolia-rpc.publicnode.com",
+    "bundlerUrl": "https://api.pimlico.io/v2/84532/rpc?apikey=<PIMLICO_API_KEY>",
+    "paymasterUrl": "https://api.pimlico.io/v2/84532/rpc?apikey=<PIMLICO_API_KEY>",
+    "paymasterContext": { "sponsorshipPolicyId": "<SPONSORSHIP_POLICY_ID>" },
+    "sponsorTransactions": true,
+    "limits": { "maxPreVerificationGas": "1000000", "maxFeePerGas": "2000000000" }
+  }
+}

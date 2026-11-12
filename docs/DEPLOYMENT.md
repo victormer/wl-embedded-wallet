@@ -447,7 +447,7 @@ Two replicas are exercised by `pnpm test:e2e:image`: enrollment and deployment o
 
 ## Deploy to Vercel and Neon
 
-The vault and the demo app can each run as a Vercel project with its own Neon Postgres database. This is the setup of the public testnet demo. The repository carries what Vercel needs; it was checked with a local Vercel-like build (`VERCEL=1`) but **has not yet been deployed to Vercel**, so run the [smoke tests](#smoke-tests) after the first deployment.
+The vault and the demo app can each run as a Vercel project with its own Neon Postgres database. This is the setup of the public testnet demo. The repository carries what Vercel needs; the public demo runs on it. Run the [smoke tests](#smoke-tests) after the first deployment of your own.
 
 > [!WARNING]
 > **Passkeys made on a `*.vercel.app` vault are bound to that host forever.** `RP_ID` must be the vault's host, and moving later to a custom domain changes it: every passkey, the PRF material derived from it and the kit-free recovery path become unusable, and users are left with their kit and recovery code. Treat a `*.vercel.app` deployment as a **testnet demo whose wallets may be lost**, or use the final custom domain from day one.
@@ -469,6 +469,25 @@ Other differences from the image:
 | Root `.vercelignore` | Only for `vercel deploy` from a working tree, which does not read `.gitignore`: it keeps `.env*` files, `data/` and build output out of the upload. Deploy through the Git integration, not the CLI. |
 
 At runtime `VERCEL=1` also changes the code: the vault and the demo default to 5 Postgres connections per instance and close idle ones after 5 seconds; the vault requires `sslmode` on a non-local `DATABASE_URL` and `CLIENT_IP_SOURCE=vercel`; the demo requires `DATABASE_URL`.
+
+<a id="vercel-aa-chains"></a>
+
+### Updating `AA_CHAINS` from a local file
+
+`AA_CHAINS` carries the bundler and paymaster API keys, so it is a Sensitive variable that cannot be read back, and a
+JSON typo in the dashboard stops the vault (`Invalid configuration: AA_CHAINS is not valid JSON`). Keep it in a local,
+ignored file instead and push it with `scripts/vercel-aa-chains.mjs`:
+
+```bash
+mkdir -p .secrets && cp deploy/vercel/aa-chains.example.json .secrets/aa-chains.json   # then fill in the keys
+echo '{ "project": "<vault project>", "team": "<team slug>" }' > .secrets/vercel.json
+node scripts/vercel-aa-chains.mjs --check       # validates; prints chain ids, hosts and flags, never keys
+node scripts/vercel-aa-chains.mjs --redeploy    # saves it as Sensitive (Production) and redeploys the vault
+```
+
+`.secrets/` is in `.gitignore` and `.vercelignore`. The token is `VERCEL_TOKEN` or the Vercel CLI's login. The script
+checks the structure (valid JSON, known fields, https URLs, no leftover `<PLACEHOLDER>`); the vault still runs its full
+validation at startup, so check `/api/health` after the redeploy.
 
 ### Project settings
 
