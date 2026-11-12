@@ -321,6 +321,19 @@ describe('POST /api/aa/rpc: server-built deployment', () => {
       expect((await sendOp(await sign(prepared))).status).toBe(200);
     });
 
+    it('the prepared deployment without its factory is not a transaction either', async () => {
+      const prepared = await prepare();
+      const withoutFactory = toRpcUserOperation(await sign({ ...prepared, factory: null, factoryData: null }));
+      for (const candidate of [withoutFactory, { ...withoutFactory, factory: null, factoryData: null }, { ...toRpcUserOperation(await sign(prepared)), factory: null }]) {
+        const response = await sendRaw(candidate);
+        expect(response.status).toBe(403);
+        expect(await response.json()).toEqual({ error: 'OPERATION_NOT_ALLOWED' });
+      }
+      expect(bundler.of('eth_sendUserOperation')).toHaveLength(0);
+      expect(await getSponsoredDeployment(CHAIN, account.address)).toMatchObject({ status: 'prepared' });
+      expect((await sendOp(await sign(prepared))).status).toBe(200);
+    });
+
     it('a field the prepared operation does not have is refused', async () => {
       const operation = toRpcUserOperation(await sign(await prepare()));
       expect(await (await sendRaw({ ...operation, eip7702Auth: { address: OTHER } })).json()).toEqual({ error: 'OPERATION_NOT_ALLOWED' });

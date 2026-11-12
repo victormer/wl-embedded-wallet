@@ -46,13 +46,13 @@ Development and testing have only been done on macOS on Apple silicon (arm64). L
 | Command | Runs | Needs | Approx. tests |
 |---|---|---|---|
 | `pnpm typecheck` | `tsc --noEmit` in every workspace package | Node | n/a |
-| `pnpm test` | Vitest unit tests of `packages/core`, `packages/sdk`, `packages/recovery-tool`, `apps/vault`, `examples/demo` | Node | about 1121 tests (core 90, sdk 223, recovery-tool 14, vault 702, demo 92 with one skipped) |
-| `pnpm test:pg` | Store contract and the vault route tests (API, AA proxy, body cap, share A, server-to-server, route limits, passkey recovery, relink), then the demo's database, API and rate-limit tests, each run against its own temporary Postgres. `pnpm test:pg:demo` runs only the demo part | Docker | about 271 vault tests plus about 80 demo tests |
-| `pnpm test:aa` | Real Safe and EntryPoint contracts on anvil, without a browser | anvil | 10 |
+| `pnpm test` | Vitest unit tests of `packages/core`, `packages/sdk`, `packages/recovery-tool`, `apps/vault`, `examples/demo` | Node | about 1350 tests (core 130, sdk 278, recovery-tool 14, vault 832, demo 96 with one skipped) |
+| `pnpm test:pg` | Store contract and the vault route tests (API, AA proxy, transactions, body cap, share A, server-to-server, route limits, passkey recovery, relink), then the demo's database, API and rate-limit tests, each run against its own temporary Postgres. `pnpm test:pg:demo` runs only the demo part | Docker | about 385 vault tests plus about 80 demo tests |
+| `pnpm test:aa` | Real Safe and EntryPoint contracts on anvil, without a browser | anvil | 15 |
 | `pnpm aa:stack` | Not a test: keeps local chains running for `pnpm dev` | anvil | n/a |
-| `pnpm test:e2e` | Playwright: production builds of the vault and demo, virtual passkeys, local chains | anvil, Chromium | about 75 tests |
-| `pnpm test:e2e:pg` | The same e2e suite with the vault on Postgres | anvil, Chromium, Docker | about 75 tests (the same suite) |
-| `pnpm test:e2e:image` | The e2e suite against the real Docker image with Postgres, plus image-specific tests | anvil, Chromium, Docker | about 85 tests (the 75 of the e2e suite plus 10 image tests) |
+| `pnpm test:e2e` | Playwright: production builds of the vault and demo, virtual passkeys, local chains | anvil, Chromium | about 79 tests |
+| `pnpm test:e2e:pg` | The same e2e suite with the vault on Postgres | anvil, Chromium, Docker | about 79 tests (the same suite) |
+| `pnpm test:e2e:image` | The e2e suite against the real Docker image with Postgres, plus image-specific tests | anvil, Chromium, Docker | about 89 tests (the 79 of the e2e suite plus 10 image tests) |
 
 `pnpm build` (production builds of every package) is not a test suite, but the e2e suite performs its own
 builds.
@@ -69,7 +69,7 @@ the vault uses SQLite in temporary directories, chains are faked with in-process
 exercised with a fake authenticator that does real cryptography. pnpm stops at the first package that fails; run
 a single package with `pnpm --filter <path> test`.
 
-### `packages/core` (about 90 tests)
+### `packages/core` (about 130 tests)
 
 Pure crypto and data formats shared by the vault, the worker and the offline tool. Config: Vitest defaults
 (`tests/**/*.test.ts`).
@@ -84,15 +84,16 @@ Pure crypto and data formats shared by the vault, the worker and the offline too
 | `tests/kit.test.ts` | Kit versions: v2 carries the backup, v1 is still read, strict parsing |
 | `tests/offline.test.ts` | Kit + code recovery: seed returned only when owner and Safe match; wrong code, tampered, foreign and old kits |
 | `tests/sign-request.test.ts` | Parsing of message, EIP-712 and UserOperation sign requests; kit parsing without share A |
+| `tests/transaction.test.ts` | One call from the deployed Safe: `buildTransactionOperation` (unsigned, `executeUserOpWithErrorString(to, value, data, 0)`, always a CALL); `isTransactionOperation` accepts the built operation (signed, with paymaster and gas filled in, in any address or hex case) and rejects another sender, a factory, the other module entry point and a MultiSend batch, even of the same call; `isAllowedTransactionCall` refuses a self-call with data and allows a plain self-transfer; `parseVaultCall` (decimal `value` up to 2^256 - 1, even-length hex `data` up to 128,000 characters, no extra keys) |
 | `tests/crypto-spec-vectors.test.ts` | Every test vector of `docs/CRYPTO-SPEC.md` section 22 (PRF input and user handle, share A, B and C envelopes, recovery code, seed backup, Safe address, manifest signature, SafeMessage hash, relink typed data hash), with the values parsed from the document. See [Tests that depend on documentation](#tests-that-depend-on-documentation). |
 
-### `packages/sdk` (about 223 tests)
+### `packages/sdk` (about 278 tests)
 
 The integrator SDK: `/client` (popup), `/server` (handoff tokens, JWKS, server-to-server client), `/protocol`.
 
 | File | Covers |
 |---|---|
-| `tests/client.test.ts` | `createVaultClient`: popup opened synchronously with a fixed window name and no token in the URL, `ready`/`request`/`result` handshake to the exact origin, every operation kind, network passing, relink, export never returns the seed, listener cleanup; result validation per action (a malformed result rejects at once with `PROTOCOL_ERROR`); `timeoutMs` (`TIMEOUT`, closes the popup, invalid values refused with a `RangeError`); `INTERNAL` when `window.open` throws or the request cannot be posted; `TOKEN_UNAVAILABLE`; a failed token for an outdated `ready` is ignored |
+| `tests/client.test.ts` | `createVaultClient`: popup opened synchronously with a fixed window name and no token in the URL, `ready`/`request`/`result` handshake to the exact origin, every operation kind, network passing, `sendTransaction` (opens `/transaction` with only the `chainId`, normalizes `value` to a decimal wei string and drops empty `data`, `INVALID_REQUEST` before opening the popup for a malformed call or chain, without superseding the pending operation; extra result fields dropped; vault codes such as `TRANSACTION_REVERTED` propagated), relink, export never returns the seed, listener cleanup; result validation per action (a malformed result rejects at once with `PROTOCOL_ERROR`); `timeoutMs` (`TIMEOUT`, closes the popup, invalid values refused with a `RangeError`); `INTERNAL` when `window.open` throws or the request cannot be posted; `TOKEN_UNAVAILABLE`; a failed token for an outdated `ready` is ignored |
 | `tests/handoff.test.ts` | Handoff JWT: claims, verification with the published JWK by a standard library, wrong key/issuer/audience, no private material in the JWK, unique `jti`, refusal of invalid claims, interoperability with `jose` |
 | `tests/server.test.ts` | EdDSA, ES256 and RS256 signers from PEM, generated or JWK keys; weak or mismatched keys; JWKS helpers refuse private material, and `jwksHandler` answers a clean 500 instead; server-to-server account client, trailing slashes removed from `vaultOrigin` |
 | `tests/docs-example.test.ts` | The code examples in `packages/sdk/examples/` appear verbatim in `docs/INTEGRATION.md` and produce tokens that verify. See [Tests that depend on documentation](#tests-that-depend-on-documentation). |
@@ -107,7 +108,7 @@ The `test` script first rebuilds `dist/` (`node scripts/build.mjs`), then runs V
 | `tests/cli.test.ts` | Node CLI: checks owner and Safe, `--show-seed`, exit codes for wrong code and tampered kit, mismatch handling, old kits, refuses the code as an argument, no network use (`tests/no-network.mjs` is a detector that fails any network access) |
 | `tests/messages.test.ts` | User-facing message for an old kit |
 
-### `apps/vault` unit (about 702 tests)
+### `apps/vault` unit (about 832 tests)
 
 Config: `apps/vault/vitest.config.ts`, `tests/unit/**/*.test.ts`, Node environment, 30 s timeout. API routes are
 called in process (`tests/unit/route-harness.ts`). Several files run on SQLite by default and on Postgres when
@@ -117,6 +118,7 @@ called in process (`tests/unit/route-harness.ts`). Several files run on SQLite b
 |---|---|
 | `api.test.ts` | API routes: handoff exchange and session cookie (`label` limits, a token refused for `CHAIN_REQUEST_MISMATCH` is not spent), server-to-server accounts, share set lifecycle (create, activate, revoke, fetch A), export audit, session network, network status and the bundler/paymaster proxy allowlist, Safe parameters in `POST /api/shares`, no secrets in logs, `/api/health` |
 | `aa-rpc.test.ts` | Server-built sponsored deployment on `POST /api/aa/rpc` against fake bundler and paymaster servers (`fake-upstream.ts`): `vault_prepareDeployment` (network fees, the bundler's `pimlico_getUserOperationGasPrice` quote as a floor and the fallback without it, bundler estimate, paymaster stub and final data, fee and gas caps, paymaster and estimate shape checks, without a paymaster); `eth_sendUserOperation` only for the prepared operation with the owner's signature (any changed or extra field refused, idempotent resend, `ALREADY_SPONSORED`, retry window, concurrent sends forwarded once, release after an upstream or transport error); `eth_getUserOperationReceipt` only for the recorded hash; removed methods get `METHOD_NOT_ALLOWED`; another user's session; rate limits; the fee and gas rules |
+| `transactions.test.ts` | Transactions from a deployed Safe on `POST /api/aa/rpc`, against fake bundler and paymaster servers: `vault_prepareTransaction` (nonce from the EntryPoint, network fees, bundler estimate with the margin, paymaster stub and final data only with `sponsorTransactions: true`, only a CALL, the same call prepared twice gives the same operation; gas, fee and paymaster gas caps and per-chain `limits`; `NOT_DEPLOYED`, `CALL_NOT_ALLOWED` for a self-call with data, `INSUFFICIENT_FUNDS` before any paymaster call, `INVALID_BODY` for malformed calls without going upstream; unsponsored, the balance must cover value plus prefund); `eth_sendUserOperation` without `factory` (exactly the prepared operation with the owner's signature, in decimal or hex and any address case, once; a delegatecall byte, dropped fields, an extra key, a wrong signature or an operation never prepared refused; idempotent resend, concurrent sends forwarded once, release after a bundler error, `TRANSACTION_EXPIRED` after `TRANSACTION_TTL_MS`); `eth_getUserOperationReceipt` only for a transaction this Safe sent on this chain; the `transaction` rate-limit scope per user and per IP; upstream errors (`UPSTREAM_ERROR` sanitized, paymaster policy rejections, `CHAIN_UNAVAILABLE`, `CHAIN_MISMATCH`); `upstreamErrorCode` for transactions and deployments; the page's `prepareTransaction` checks |
 | `share-a.test.ts` | `GET /api/shares/a` of a pending set only to the session that created it and within a session lifetime (rotation in progress, sets created before migration 6, other users); the release audit record (none for a refused request, no release if it cannot be recorded); per-session and per-user budgets, spent before the lookup |
 | `s2s.test.ts` | `GET /api/s2s/accounts/:sub` input: bearer checked first, `sub` format (`INVALID_SUB`), `chainId` a positive safe integer (`INVALID_CHAIN_ID`), no chain query for an unknown account; per-sub and per-IP limits, the same answers whether or not the account exists |
 | `route-limits.test.ts` | `POST /api/auth/handoff` limits (per IP before verifying, per sub before the `jti` is spent); the shared enrollment budget of `POST /api/webauthn/challenge`, `POST` and `PATCH /api/shares`, per user and per IP |
@@ -131,12 +133,12 @@ called in process (`tests/unit/route-harness.ts`). Several files run on SQLite b
 | `relink.test.ts` | Relinking a wallet to another account: owner EIP-712 signature, nonce reuse, expiry and ownership, session and origin checks, audit trail; nonce and relink limits per account and per IP |
 | `handoff.test.ts` | Handoff token verification with a real local JWKS server: EdDSA/ES256/RS256, key rotation without restart, unknown and missing `kid`, download throttling, stale cache then fail-closed, private material rejection, claim checks (`label` length), a rejection does not use up the token |
 | `server.test.ts` | KMS stub for share A (sealing, authenticated salt, wrong `MASTER_KEY`), handoff `jti` consumption |
-| `config.test.ts` | `normalizeOrigin`, `validateConfig` for every environment variable (including the limit variables, all reported at once, `AA_CHAINS[].nativeCurrency`, and a complete Vercel configuration with `sslmode` required there), exactly one of JWKS or fixed key, `publicRuntimeConfig` |
-| `chains.test.ts` | Safe address equals WDK's; RPC provenance (HTTPS, plain HTTP only to local hosts in insecure local mode, credentials, host allowlist, configuration precedence); JSON-RPC client (no redirects, size cap, URL never in errors); `chainStatus` (factory must return the predicted address, missing bundler) |
+| `config.test.ts` | `normalizeOrigin`, `validateConfig` for every environment variable (including the limit variables, all reported at once, `AA_CHAINS[].nativeCurrency`, `AA_CHAINS[].sponsorTransactions` (a boolean, `true` only with `paymasterUrl`), and a complete Vercel configuration with `sslmode` required there), exactly one of JWKS or fixed key, `publicRuntimeConfig` |
+| `chains.test.ts` | Safe address equals WDK's; RPC provenance (HTTPS, plain HTTP only to local hosts in insecure local mode, credentials, host allowlist, configuration precedence); JSON-RPC client (no redirects, size cap, URL never in errors); `chainStatus` (factory must return the predicted address, missing bundler); `transactionsSponsored` only with a paymaster and `sponsorTransactions: true` |
 | `envelope.test.ts` | Share envelopes A/B/C: AAD binding to user, set and slot, bit flips in `ct`/`iv`/`salt`, fresh IVs |
 | `recovery.test.ts` | Enrollment logic, A+B, A+C and B+C recovery, every abort condition before combining (manifest signature, digest, tampered A, address, Safe, format, foreign set), zeroing of PRF and code, A+C re-enrollment |
 | `seed-backup.test.ts` | Seed backup goes into the kit and never into the POST body; kit + code recovery; B+C operations without the server; relink signature; kit upgrade; worker transfer; `GET /recovery-tool` |
-| `sign.test.ts` | Worker `sign` op (Safe message, EIP-712, UserOperation, nothing sent to the chain, seed rebuilt per signature, no secrets in the response, refusals) and `deploy` op |
+| `sign.test.ts` | Worker `sign` op (Safe message, EIP-712, UserOperation, nothing sent to the chain, seed rebuilt per signature, no secrets in the response, refusals), `deploy` op and `send-transaction` op (signs the reviewed call, a self-transfer without data allowed, PRF wiped; refuses another call, a batch, another sender or a factory, `CALL_NOT_ALLOWED` for a self-call with data, `WALLET_NOT_DEPLOYED`, `CHAIN_MISMATCH`, `MANIFEST_INVALID`) |
 | `export.test.ts` | Worker `export` op: seed returned only after every check; PRF wiped |
 | `prf.test.ts` | Passkey PRF: result at `create`, fallback to `get` when `create` only reports `enabled`, required options, per-set user handle, fixed salt, 32-byte output |
 | `signer-client.test.ts` | Worker runner: transferables, single response, termination, errors mapped to `INTERNAL` |
@@ -147,7 +149,7 @@ called in process (`tests/unit/route-harness.ts`). Several files run on SQLite b
 | `scripts.test.ts` | `pnpm setup:env` writes consistent vault and demo environments without printing secrets or overwriting values |
 | `store.sqlite.test.ts` | The shared store contract (`tests/store/contract.ts`) on SQLite, and file permissions 600 |
 
-### `examples/demo` unit (about 92 tests)
+### `examples/demo` unit (about 96 tests)
 
 Config: `examples/demo/vitest.config.ts`, `tests/unit/**/*.test.ts`.
 
@@ -158,6 +160,7 @@ Config: `examples/demo/vitest.config.ts`, `tests/unit/**/*.test.ts`.
 | `tests/unit/db.test.ts` | The demo database on SQLite (on Postgres in `test:pg`): users, second factor and TOTP steps, sessions, rate-limit buckets, backend selection by `DATABASE_URL` (Postgres, SQLite, other values refused, required with `VERCEL=1`), URL normalization and `DATABASE_POOL_SIZE`, never echoing the URL |
 | `tests/unit/rate-limit.test.ts` | Auth route limits: defaults and `DEMO_RATE_LIMITS`, the client address (`x-real-ip` only on Vercel, one bucket elsewhere, never `X-Forwarded-For`), `429` with `Retry-After` on register, login, TOTP and TOTP setup, per-user TOTP limits, a foreign origin rejected before it counts. One case runs only on Postgres |
 | `tests/unit/messages.test.ts` | Deployment notice: an unknown state is shown as unknown, never as not deployed |
+| `tests/unit/transaction.test.ts` | The Transaction tab's form: the amount converted from native units to wei, empty data dropped, invalid recipient, amount or data refused; every code the vault may return for a transaction has its own text |
 | `tests/unit/setup-env.test.ts` | `pnpm setup:env` generates and preserves the demo TOTP key |
 
 ## `pnpm test:pg`: Postgres
@@ -174,13 +177,13 @@ including on Ctrl-C. Without arguments it runs Vitest with `apps/vault/vitest.pg
 
 - `tests/pg/store.pg.test.ts`: the same store contract as SQLite (`tests/store/contract.ts`: users, sessions,
   `jti`, share sets, WebAuthn challenges, credentials, relink, rate limit buckets, share A releases, sponsored
-  deployments, migrations), including concurrency **across replicas** (several store instances on one database:
+  deployments, prepared transactions, migrations), including concurrency **across replicas** (several store instances on one database:
   single winner for a `jti`, an activation, a `setId`, a challenge, a counter step, a relink nonce, a sponsored
-  deployment claim; a distinct count for each concurrent rate limit hit; the live challenge cap never exceeded;
+  deployment claim, a prepared transaction claim; a distinct count for each concurrent rate limit hit; the live challenge cap never exceeded;
   parallel migrations), plus opening Postgres by `DATABASE_URL` without leaking the password on failure. Between
   tests the schema is dropped and recreated.
 - `tests/unit/api.test.ts`, `tests/unit/passkey-recovery.test.ts`, `tests/unit/relink.test.ts`,
-  `tests/unit/aa-rpc.test.ts`, `tests/unit/body-limit.test.ts`, `tests/unit/share-a.test.ts`,
+  `tests/unit/aa-rpc.test.ts`, `tests/unit/transactions.test.ts`, `tests/unit/body-limit.test.ts`, `tests/unit/share-a.test.ts`,
   `tests/unit/s2s.test.ts`, `tests/unit/route-limits.test.ts`: the same files as in the unit suite, now backed by
   Postgres. These are the exact entries of `include` in `apps/vault/vitest.pg.config.ts`, besides
   `tests/pg/**/*.test.ts`.
@@ -212,7 +215,12 @@ no browser:
   touching chain B, then on chain B at the same address through the vault routes (prepared by the server with
   `vault_prepareDeployment`, sent once);
 - ERC-1271: a Safe message signature is valid on its chain and not on the other;
-- the real Safe accepts a self-funded UserOperation (no paymaster) signed for the deployed Safe.
+- the real Safe accepts a self-funded UserOperation (no paymaster) signed for the deployed Safe;
+- transactions through the vault routes (`vault_prepareTransaction`, then `eth_sendUserOperation`), with
+  `sponsorTransactions` on chain B only: a sponsored 0-value call on B (the paymaster pays, the Safe's balance does
+  not move, a resend returns the same hash without forwarding again); an unsponsored value transfer on A, paid by
+  the Safe, with no paymaster call; `INSUFFICIENT_FUNDS` for a value the Safe cannot pay; a call that reverts is
+  included with `success: false`; `NOT_DEPLOYED` for a Safe that is not deployed.
 
 It uses the same ports as the e2e suite, so do not run `test:aa` and `test:e2e` at the same time.
 
@@ -223,7 +231,8 @@ pnpm aa:stack
 ```
 
 Not a test. `apps/vault/tests/aa-stack/run.mjs` keeps three local chains running for `pnpm dev` and prints the
-matching `AA_CHAINS`, `RPC_ALLOWED_HOSTS` and `DEMO_CHAINS`. `pnpm setup:env` already writes these values.
+matching `AA_CHAINS`, `RPC_ALLOWED_HOSTS` and `DEMO_CHAINS`. `pnpm setup:env` already writes these values. Chain
+31001 also sponsors transactions (`"sponsorTransactions": true`); on 31002 the Safe pays for its own transactions.
 
 | Chain ID | anvil RPC | Bundler | Paymaster |
 |---|---|---|---|
@@ -251,7 +260,7 @@ Global setup (`e2e/support/global-setup.ts`):
    development build and `.env.local` are not touched; `next-env.d.ts` and `tsconfig.json` are restored after the
    build).
 3. Starts three anvil chains with the real contracts (chain IDs 31001, 31002, and 31003 without a factory), a local
-   bundler and paymaster for the first two.
+   bundler and paymaster for the first two. Only 31001 sponsors transactions (`sponsorTransactions`).
 4. Starts the vault standalone server (`node --require apps/vault/scripts/peer-address.cjs server.js`,
    `NODE_ENV=production`, so the strict CSP and Trusted Types apply) on 4301 with SQLite, the fictional example
    brand, deterministic test keys and `ALLOW_INSECURE_LOCAL=1`; two demo instances on 4300 and 4302 (two "apps"
@@ -286,6 +295,7 @@ sign-in within the same 30 s.
 | `tests/n-passkey-recovery.spec.ts` | Recovery without a kit using one discoverable assertion (no JWT, never share A, no session, PRF output never leaves the browser); wrong code and reused challenge; wallets enrolled without a public key; unknown passkey gets the generic response |
 | `tests/o-relink.spec.ts` | Relinking a wallet to a new account with kit and code, with B+C, and with passkey and code only; an account with a wallet cannot take another; a failed relink reaches the app with its code, the popup only offers to go back, and the app can retry; a valid token without the owner signature cannot relink |
 | `tests/p-tool-required.spec.ts` | The kit cannot be downloaded before the recovery tool, at enrollment, rotation and kit upgrade, including when fetching the tool fails; the static page cannot fetch the tool and offers no kit |
+| `tests/q-transaction.spec.ts` | Sending a transaction from the demo's Transaction tab: a sponsored 0-value call on 31001 reviewed in the vault (Safe, recipient, amount, no data, chain, "Sponsored"), sent on-chain and the hashes shown in the app and the popup, the paymaster's deposit spent and the Safe's balance unchanged, the result kept per tab; an unsponsored value transfer on 31002 with its maximum fee shown, paid by the Safe; an ERC-20 `transfer` decoded in the review; rejection (`USER_REJECTED`), not deployed (`WALLET_NOT_DEPLOYED`), a self-call with data (`CALL_NOT_ALLOWED`, never prepared), no funds (`INSUFFICIENT_FUNDS`), and a reverting call (the data caution shown, `TRANSACTION_REVERTED` to the app, the hashes in the popup) |
 
 ## `pnpm test:e2e:pg`
 
@@ -362,7 +372,8 @@ Some tests read documentation files, so editing those documents can break them:
   EntryPoint v0.7, SenderCreator, Safe proxy factory, Safe L2 singleton, Safe 4337 module, Safe module setup and
   MultiSend with `anvil_setCode` (from `fixtures/contracts.json`), deploys a test verifying paymaster
   (`contracts/TestVerifyingPaymaster.sol`, compiled artifact in `fixtures/`) with a 10 ETH EntryPoint deposit, and
-  serves a minimal JSON-RPC bundler and an ERC-7677 paymaster that call `EntryPoint.handleOps` for real. The
+  serves a minimal JSON-RPC bundler and an ERC-7677 paymaster that call `EntryPoint.handleOps` for real. Each
+  chain can opt into `sponsorTransactions`, which `aaChainsConfig` writes into `AA_CHAINS`. The
   bundler does **not** estimate gas: `eth_estimateUserOperationGas` returns fixed limits. All keys there are the
   well-known public anvil keys.
 - **`apps/vault/tests/aa-stack/fetch-contracts.mjs`**: run by hand, once, to copy the contract bytecode from
@@ -370,7 +381,7 @@ Some tests read documentation files, so editing those documents can break them:
 - **`apps/vault/tests/unit/fake-authenticator.ts`** and **`fake-rpc.ts`**: an in-process WebAuthn authenticator with
   real signatures, and an RPC stub, for unit tests.
 - **`apps/vault/tests/unit/fake-upstream.ts`**: a fake bundler or paymaster over local HTTP with per-method handlers
-  and a record of the calls, for `aa-rpc.test.ts`. It is not a real provider: the sponsorship caps and their
+  and a record of the calls, for `aa-rpc.test.ts` and `transactions.test.ts`. It is not a real provider: the sponsorship caps and their
   defaults are not tested against real bundlers, paymasters or L2s.
 - **`apps/vault/tests/store/contract.ts`**: the store contract shared by the SQLite and Postgres runs.
 - **`e2e/support/`**: harness (virtual authenticator, secret detector, popup helpers), environment and

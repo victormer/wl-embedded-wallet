@@ -94,6 +94,11 @@ function parseUserOperation(raw: unknown): UserOperationRequest {
   };
 }
 
+/** One call from the app (`transaction` action), validated like the calls of a UserOperation. Throws `InvalidSignRequest`. */
+export function parseVaultCall(raw: unknown): VaultCall {
+  return parseCall(raw);
+}
+
 /** Converts the app's request into the worker's request. Throws `InvalidSignRequest`. */
 export function parseSignRequest(raw: unknown): SignRequest {
   require(isRecord(raw));

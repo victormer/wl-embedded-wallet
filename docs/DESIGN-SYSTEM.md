@@ -289,9 +289,10 @@ are CSS custom properties on `:root` in `apps/vault/app/globals.css`, with dark 
 ### Notice scale (fixed)
 
 - **Caution** (`--caution`, `--caution-bg`, `--caution-line`, `--caution-icon`): security warnings, for example
-  "store the kit and the code separately", "the seed gives full control", or a different wdk-utils version. It is
-  a true yellow (hue about 50°), deliberately kept away from brand oranges such as `#FCA311` (about 37°). An
-  "amber" was considered and resolved into yellow so that it cannot be confused with an orange accent.
+  "store the kit and the code separately", "the seed gives full control", a different wdk-utils version, or a
+  transaction whose data is an ERC-20 approval or is not decoded. It is a true yellow (hue about 50°), deliberately
+  kept away from brand oranges such as `#FCA311` (about 37°). An "amber" was considered and resolved into yellow so
+  that it cannot be confused with an orange accent.
 - **Danger** (`--danger`, `--danger-bg`, `--danger-line`, `--danger-icon`): flow errors, with `role="alert"`.
 - **Success** (`--success`, `--success-bg`, `--success-line`, `--success-icon`): confirmations.
 - **Info**: has no color of its own. It uses tinted paper, the rule and a pencil icon, so it inherits the brand
@@ -468,11 +469,12 @@ Firm and unadorned: one fill, one weight and no shadow (`.button`).
 
 The label in pencil at 13 px above, and the value below on tinted paper (`.value`), with a transparent border,
 inner radius and 10 x 12 px padding. Technical values are monospace at 13 px; long data (messages, EIP-712) goes in
-a scrollable block of at most 220 px (`.value-pre`). The summarizing value (the network with its `chainId`) is
+a scrollable block of at most 220 px (`.value-pre`; also a transaction's calldata). The summarizing value (the network with its `chainId`) is
 set at 650 (`.value-strong`). An empty value shows in pencil at 14 px (`.value-empty`).
 
 Each call of a UserOperation (`.call`) is a definition list of `to`, amount and data, each with its 12 px
-label, indented 12 px behind a 1 px rule.
+label, indented 12 px behind a 1 px rule. A transaction's decoded ERC-20 `transfer` or `approve` (token contract,
+recipient or spender, amount) uses the same `.call` list.
 
 **The read versus editable rule.** A value being approved never looks like a field: what is read is tinted and has
 no stroke; what is editable is paper with a firm stroke.

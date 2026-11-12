@@ -144,6 +144,24 @@ describe('chainStatus', () => {
     expect((simulated.params[0] as { to: string }).to).toBe(account.factory);
   });
 
+  it('transactionsSponsored only with a paymaster and sponsorTransactions: true', async () => {
+    await expect(status()).resolves.toMatchObject({ sponsored: true, transactionsSponsored: false });
+    const configure = (config: Record<string, unknown>) => (process.env.AA_CHAINS = JSON.stringify({ [CHAIN_ID]: { bundlerUrl: 'http://127.0.0.1:1', ...config } }));
+    configure({ paymasterUrl: 'http://127.0.0.1:1', sponsorTransactions: true });
+    await expect(status()).resolves.toMatchObject({ sponsored: true, transactionsSponsored: true });
+    configure({ paymasterUrl: 'http://127.0.0.1:1', sponsorTransactions: false });
+    await expect(status()).resolves.toMatchObject({ transactionsSponsored: false });
+    // Not a boolean: off (validateConfig reports it).
+    configure({ paymasterUrl: 'http://127.0.0.1:1', sponsorTransactions: 'true' });
+    await expect(status()).resolves.toMatchObject({ transactionsSponsored: false });
+    configure({ sponsorTransactions: true });
+    await expect(status()).resolves.toMatchObject({ sponsored: false, transactionsSponsored: false });
+    // Also once deployed.
+    rpc.state.code[account.address.toLowerCase()] = '0x60';
+    configure({ paymasterUrl: 'http://127.0.0.1:1', sponsorTransactions: true });
+    await expect(status()).resolves.toMatchObject({ deployed: true, transactionsSponsored: true });
+  });
+
   it('deployed if the Safe has code, without simulating the factory', async () => {
     rpc.state.code[account.address.toLowerCase()] = '0x60';
     await expect(status()).resolves.toMatchObject({ deployed: true });

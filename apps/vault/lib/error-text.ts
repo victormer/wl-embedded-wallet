@@ -27,10 +27,19 @@ const MESSAGES: Record<string, string> = {
   CHAIN_REQUEST_MISMATCH: 'The request network does not match the one authorized by the app. Nothing was signed.',
   ORIGIN_MISMATCH: 'The authorization token does not belong to this app.',
   ORIGIN_NOT_ALLOWED: 'This vault does not allow this app.',
-  INSUFFICIENT_FUNDS: 'Your Safe has no funds to pay for the deployment, and this network has no paymaster.',
+  INSUFFICIENT_FUNDS: 'Your Safe does not have enough funds on this network for this operation and its network fee. Nothing was sent.',
   DEPLOY_FAILED: 'The deployment failed.',
-  FEES_TOO_HIGH: 'Network fees are above the limit this vault allows for a deployment. Nothing was sent. Try again later.',
-  GAS_LIMIT_EXCEEDED: 'The deployment would need more gas than this vault allows. Nothing was sent.',
+  FEES_TOO_HIGH: 'Network fees are above the limit this vault allows. Nothing was sent. Try again later.',
+  GAS_LIMIT_EXCEEDED: 'This operation would need more gas than this vault allows. Nothing was sent.',
+  CALL_NOT_ALLOWED: 'The vault does not send calls with data to your own Safe: they could change its owners or modules. Nothing was sent.',
+  CALL_REVERTED: 'The call would fail on-chain: the contract rejected it. Nothing was sent.',
+  SPONSORSHIP_REJECTED: "This network's paymaster refused to pay for the operation (its policy may be inactive or out of funds). Nothing was sent.",
+  NONCE_CONFLICT: 'Another operation from your Safe went through first. Nothing was sent. Try again.',
+  TRANSACTION_FAILED: 'The bundler did not accept the transaction. Nothing was sent.',
+  TRANSACTION_REVERTED: 'The transaction was included on-chain, but its call failed. The network fee was still paid.',
+  TRANSACTION_TIMEOUT: 'The transaction was sent but not confirmed within 3 minutes. Check it in the block explorer before trying again.',
+  TRANSACTION_EXPIRED: 'The transaction took too long to approve and its fees are no longer valid. Nothing was sent. Try again.',
+  TRANSACTION_IN_PROGRESS: 'This transaction is already being sent. Wait a moment.',
   ALREADY_SPONSORED: 'A deployment of your wallet was already sent on this network. Wait a few minutes for it to complete before trying again.',
   DEPLOYMENT_IN_PROGRESS: 'Your wallet is already being deployed on this network. Wait a moment and try again.',
   RATE_LIMITED: 'Too many requests. Wait a moment and try again.',
@@ -38,9 +47,24 @@ const MESSAGES: Record<string, string> = {
   INTERNAL: 'Something went wrong. No data was revealed.',
 };
 
-/** Deployment codes from the vault server that have their own text. The worker never produces them. */
-export type ServerErrorCode = 'FEES_TOO_HIGH' | 'GAS_LIMIT_EXCEEDED' | 'ALREADY_SPONSORED' | 'DEPLOYMENT_IN_PROGRESS' | 'RATE_LIMITED';
-export const SERVER_ERROR_CODES: readonly string[] = ['FEES_TOO_HIGH', 'GAS_LIMIT_EXCEEDED', 'ALREADY_SPONSORED', 'DEPLOYMENT_IN_PROGRESS', 'RATE_LIMITED'];
+/** Deployment and transaction codes from the vault server that have their own text. The worker never produces them. */
+export type ServerErrorCode =
+  | 'FEES_TOO_HIGH'
+  | 'GAS_LIMIT_EXCEEDED'
+  | 'ALREADY_SPONSORED'
+  | 'DEPLOYMENT_IN_PROGRESS'
+  | 'TRANSACTION_EXPIRED'
+  | 'TRANSACTION_IN_PROGRESS'
+  | 'RATE_LIMITED';
+export const SERVER_ERROR_CODES: readonly string[] = [
+  'FEES_TOO_HIGH',
+  'GAS_LIMIT_EXCEEDED',
+  'ALREADY_SPONSORED',
+  'DEPLOYMENT_IN_PROGRESS',
+  'TRANSACTION_EXPIRED',
+  'TRANSACTION_IN_PROGRESS',
+  'RATE_LIMITED',
+];
 
 /** The message is always the code, as with `WalletError`. */
 export class ServerError extends Error {

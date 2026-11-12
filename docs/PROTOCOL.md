@@ -41,7 +41,7 @@ flowchart LR
 - The **integrator page** runs the SDK (`@wl-embedded-wallet/sdk/client`). It never handles shares or the seed.
 - The **vault popup** is a Next.js page on the vault's own origin (`ORIGIN`). It cannot be framed (`frame-ancestors 'none'`, `X-Frame-Options: DENY`), so a popup is the only way to reach it.
 - The **integrator backend** authenticates the user and mints the handoff token. It publishes its public keys in a JWKS document that the vault server fetches.
-- The **vault server** verifies tokens, holds share A and the encrypted envelopes, and proxies the bundler and paymaster for deployments.
+- The **vault server** verifies tokens, holds share A and the encrypted envelopes, and proxies the bundler and paymaster for deployments and transactions, building every UserOperation it forwards.
 
 ## Constants
 
@@ -87,9 +87,11 @@ type VaultResult = {
       signature?: `0x${string}`;
       // For `userOperation`, the complete operation with its signature. It is not submitted on-chain.
       userOperation?: UserOperationJson;
-      // `deploy` only. When absent, the Safe was already deployed and nothing was signed.
+      // `deploy` and `transaction`. For `deploy`, when absent, the Safe was already deployed and nothing was signed.
       userOpHash?: `0x${string}`;
       transactionHash?: `0x${string}`;
+      // `transaction` only: the network it was sent on.
+      chainId?: number;
     }
   | { ok: false; code: string }
 );
@@ -137,7 +139,7 @@ type VaultResult = {
 - A result with `ok: true` is posted only after the vault server has verified the token and confirmed that its `origin` claim equals that request origin. Before that, only `ok: false` results can be posted; an `ok: true` outcome is replaced with `{ ok: false, code: 'UNAUTHORIZED' }`.
 - At most one result per page load. After it, the page ignores further `respond` calls and `renew()`.
 - The SDK handles a result only if its `id` matches the operation; results with another `id` are ignored. A result for the operation is then validated against the action, and settles the operation either way, since the vault posts at most one:
-  - `ok === true` with the fields its action defines ([Actions](#actions)): `address` and `owner` 20-byte hex addresses; for `deploy`, both `userOpHash` and `transactionHash` as 32-byte hex, or neither; for `sign`, a non-empty even-length hex `signature`; for a `userOperation` request, also a complete `UserOperationJson` (quantities as decimal strings, addresses, hex data, `null` where allowed) whose `sender` equals `address` (ignoring case) and whose `signature` equals the result's. Any other field (for example a seed, if a vault ever sent one) is dropped. It resolves with the validated fields.
+  - `ok === true` with the fields its action defines ([Actions](#actions)): `address` and `owner` 20-byte hex addresses; for `deploy`, both `userOpHash` and `transactionHash` as 32-byte hex, or neither; for `transaction`, both hashes as 32-byte hex and `chainId` equal to the requested one; for `sign`, a non-empty even-length hex `signature`; for a `userOperation` request, also a complete `UserOperationJson` (quantities as decimal strings, addresses, hex data, `null` where allowed) whose `sender` equals `address` (ignoring case) and whose `signature` equals the result's. Any other field (for example a seed, if a vault ever sent one) is dropped. It resolves with the validated fields.
   - `ok === false` with a non-empty string `code`, which becomes `VaultError(code)`.
   - Anything else (a malformed `ok: true`, `ok: false` without a code, `ok` missing) rejects at once with `PROTOCOL_ERROR`. The exact per-action rules are in [docs/INTEGRATION.md](INTEGRATION.md#errors).
 
@@ -150,6 +152,7 @@ type VaultResult = {
 | `activate` | `/activate` | none | must be absent | `address`, `owner` | `activate()` |
 | `deploy` | `/deploy` | `chain: { chainId }` | required, same `chainId` | `address`, `owner`, and `userOpHash` + `transactionHash` if a deployment was sent | `deploy(chain)` |
 | `sign` | `/sign` | `chain: { chainId }`, `request: VaultSignRequest` | required, same `chainId` | `address`, `owner`, `signature`, and `userOperation` for `request.kind === 'userOperation'` | `signMessage`, `signTypedData`, `signUserOperation` |
+| `transaction` | `/transaction` | `chain: { chainId }`, `transaction: VaultCall` | required, same `chainId` | `address`, `owner`, `chainId`, `userOpHash`, `transactionHash` (the operation was included and its call succeeded) | `sendTransaction({ chain, to, value?, data? })` |
 | `unlock` | `/unlock` | none | must be absent | `address`, `owner` | `unlock()` |
 | `recover` | `/recover` | none | must be absent | `address`, `owner` | `recover()` |
 | `export` | `/export` | none | must be absent | `address`, `owner` (the seed never leaves the vault) | `export()` |
@@ -160,6 +163,8 @@ type VaultAction =
   | { kind: 'activate' }
   | { kind: 'deploy'; chain: { chainId: number } }
   | { kind: 'sign'; chain: { chainId: number }; request: VaultSignRequest }
+  // One call from the deployed Safe, sent on-chain. The vault server builds the UserOperation.
+  | { kind: 'transaction'; chain: { chainId: number }; transaction: VaultCall }
   | { kind: 'unlock' }
   | { kind: 'recover' }
   | { kind: 'export' }
@@ -169,15 +174,19 @@ type VaultSignRequest =
   | { kind: 'message'; message: string }
   | { kind: 'typedData'; typedData: TypedDataRequest }
   | { kind: 'userOperation'; userOperation: UserOperationRequest };
+
+// `value` in decimal wei; `data` absent for a plain transfer. Always a CALL, never a delegatecall.
+type VaultCall = { to: `0x${string}`; value: string; data?: `0x${string}` };
 ```
 
 Notes:
 
 - The action carries only `chainId`. The SDK passes the full `VaultChain` (`{ chainId, rpcUrl? }`) to `getToken`, never to the popup. The RPC, if any, travels only inside the token signed by the integrator backend.
-- "Token `chain`" is enforced by the redemption route: the popup sends `chainId` only for `deploy` and `sign`, and the server requires `body.chainId ?? null` to equal `claims.chain?.chainId ?? null` (`CHAIN_REQUEST_MISMATCH` otherwise).
-- After redemption, `deploy` and `sign` also check that the chain status the server computed (for the session's chain) has the action's `chainId` (`CHAIN_REQUEST_MISMATCH`).
+- "Token `chain`" is enforced by the redemption route: the popup sends `chainId` only for `deploy`, `sign` and `transaction`, and the server requires `body.chainId ?? null` to equal `claims.chain?.chainId ?? null` (`CHAIN_REQUEST_MISMATCH` otherwise).
+- After redemption, `deploy`, `sign` and `transaction` also check that the chain status the server computed (for the session's chain) has the action's `chainId` (`CHAIN_REQUEST_MISMATCH`).
 - `sign` validates `request` with `parseSignRequest` (`packages/core/src/sign-request.ts`) before showing anything. The limits are listed in [docs/INTEGRATION.md](INTEGRATION.md#methods). An invalid request is answered with `INVALID_REQUEST`.
 - `sign` refuses to sign on a chain where the Safe is not deployed (`WALLET_NOT_DEPLOYED`). `deploy` on an already deployed Safe answers immediately, without signing and without hashes.
+- `transaction` validates `transaction` with `parseVaultCall` (`packages/core/src/sign-request.ts`: only `to`, `value` and `data`; `to` an address; `value` a decimal string within uint256; `data` even-length hex of at most 128000 characters) and answers `INVALID_REQUEST` otherwise. The SDK runs the equivalent check before opening the popup. It answers `WALLET_NOT_DEPLOYED` if the Safe is not deployed on that chain, `CHAIN_NOT_SUPPORTED` if the chain has no bundler, and `CALL_NOT_ALLOWED` for a call to the Safe itself with data (a value-only transfer to itself is allowed). See [Sending a transaction](#sending-a-transaction-sendtransaction).
 - `activate` on an account that already has a wallet returns it; it never creates a second one. `relink` on an account that has one answers `WALLET_ALREADY_EXISTS`.
 - Error codes are listed in [docs/INTEGRATION.md](INTEGRATION.md#errors).
 
@@ -211,7 +220,7 @@ Notes:
 2. **Ready.** The vault page loads and posts `ready` to its opener.
 3. **Token.** For each `ready`, the SDK calls `getToken(chain)`. If several `ready` messages arrive while tokens are being fetched, only the most recent one is answered. If `getToken` fails, or returns anything other than a non-empty string, for the most recent `ready`, the operation rejects with `TOKEN_UNAVAILABLE` and nothing is sent; a failure for an older `ready` is ignored.
 4. **Request.** The SDK posts `request` to the vault origin. If `postMessage` throws (for example, a request that cannot be cloned), it rejects with `INTERNAL`.
-5. **Redemption.** The page sends the token, the request origin and (for `deploy` and `sign`) the `chainId` to `POST /api/auth/handoff`, which verifies the token, consumes its `jti`, and sets the session cookie. On failure, the page posts `{ ok: false, code }` and shows the error.
+5. **Redemption.** The page sends the token, the request origin and (for `deploy`, `sign` and `transaction`) the `chainId` to `POST /api/auth/handoff`, which verifies the token, consumes its `jti`, and sets the session cookie. On failure, the page posts `{ ok: false, code }` and shows the error.
 6. **Flow.** The page runs the action. Signing operations show a review screen and need the user's approval and passkey. Share A is fetched by the signer worker through the session, the seed is rebuilt in the worker for this operation only, and only the outcome comes back to the page.
 7. **Result.** The page posts one `result`. The SDK validates it, removes its listener, stops polling, clears the timeout and settles the promise (`PROTOCOL_ERROR` if the result is malformed).
 8. **Close.** The SDK does not close the popup, except on `TIMEOUT`. The vault shows a final screen whose "Back to the app" button focuses the opener and calls `window.close()`. The user may also close it at any time.
@@ -221,8 +230,8 @@ Other rules:
 - **One operation per page load.** A vault page accepts one request and posts one result. The `/recover` page is the only exception: switching to a tab that opens a session calls `renew()`, which clears the accepted request and posts a new `ready`; the SDK answers with a new token and the same `id`.
 - **User closes the popup** before a result: the SDK's poll sees `popup.closed` and rejects with `POPUP_CLOSED`. This holds at every stage: before the first `ready`, while `getToken` is pending (the token it returns afterwards is never sent) and after the request was sent. Anything already done on the server side (for example a completed activation or deployment) is not rolled back.
 - **New operation while one is pending:** the window name is fixed, so `window.open` navigates the same popup to the new route. Before that, the SDK rejects the pending operation with `SUPERSEDED` and removes its listener, so it cannot answer the new page's `ready`. This holds across `VaultClient` instances on the same `window`.
-- **Timeouts.** By default the SDK has none: an operation waits for a result, `POPUP_CLOSED` or `SUPERSEDED`. With `timeoutMs`, an operation that has not settled that many milliseconds after `window.open` rejects with `TIMEOUT`, whatever its stage (including a flow waiting for the user to retry); the SDK removes its listener, clears its timers and calls `popup.close()`, which a page may do on a popup it opened. A `timeoutMs` that is not a positive finite number of at most 2147483647 makes `createVaultClient` throw `RangeError('INVALID_TIMEOUT')`. A token must be redeemed within its lifetime (60 s as minted by the SDK); since it is fetched on `ready` and redeemed immediately, this is normally not an issue. The vault session lasts 15 minutes from redemption. A passkey prompt times out after 60 s inside the vault (`CANCELLED`); in the signing and deployment flows a cancelled passkey is not final, and the user can retry or reject.
-- **Non-final errors.** Some flows show an error in the popup and let the user retry instead of posting it (a cancelled passkey while deploying or relinking, any exception while approving a signature, such as a cancelled passkey, and a wrong kit or code in the `/relink` recovery forms). In those cases the app's promise stays pending until a later success, rejection, `POPUP_CLOSED` or `TIMEOUT` (with `timeoutMs`).
+- **Timeouts.** By default the SDK has none: an operation waits for a result, `POPUP_CLOSED` or `SUPERSEDED`. With `timeoutMs`, an operation that has not settled that many milliseconds after `window.open` rejects with `TIMEOUT`, whatever its stage (including a flow waiting for the user to retry); the SDK removes its listener, clears its timers and calls `popup.close()`, which a page may do on a popup it opened. A `timeoutMs` that is not a positive finite number of at most 2147483647 makes `createVaultClient` throw `RangeError('INVALID_TIMEOUT')`. A token must be redeemed within its lifetime (60 s as minted by the SDK); since it is fetched on `ready` and redeemed immediately, this is normally not an issue. The vault session lasts 15 minutes from redemption. A passkey prompt times out after 60 s inside the vault (`CANCELLED`); in the signing, deployment and transaction flows a cancelled passkey is not final, and the user can retry or reject.
+- **Non-final errors.** Some flows show an error in the popup and let the user retry instead of posting it (a cancelled passkey while deploying, sending a transaction or relinking, any exception while approving a signature, such as a cancelled passkey, and a wrong kit or code in the `/relink` recovery forms). In those cases the app's promise stays pending until a later success, rejection, `POPUP_CLOSED` or `TIMEOUT` (with `timeoutMs`).
 
 ### Typical operation: `signMessage`
 
@@ -261,6 +270,49 @@ sequenceDiagram
   P-->>U: promise resolves
   P->>B: verify signature (account from s2s, ERC-1271)
 ```
+
+### Sending a transaction: `sendTransaction`
+
+The vault server builds the UserOperation; the app chooses only the call. Steps 1 to 5 are as for `signMessage` (route `/transaction`, the token's `chain` required).
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor U as User
+  participant P as Integrator page (SDK)
+  participant V as Vault popup
+  participant W as Signer worker
+  participant S as Vault server
+  participant N as Bundler / paymaster
+
+  P->>P: validate { to, value, data } (INVALID_REQUEST before opening)
+  P->>V: open /transaction, ready, request{ id, token, action }
+  V->>S: POST /api/auth/handoff { token, origin, chainId }
+  V->>S: GET /api/shares, GET /api/aa/status
+  Note over V: deployed? bundler? not a self-call with data?
+  V->>S: POST /api/aa/rpc vault_prepareTransaction [{ to, value, data }]
+  S->>S: eth_getCode, balance >= value, EntryPoint nonce, fees within caps
+  S->>N: estimate gas (+ paymaster stub and data if sponsorTransactions)
+  S->>S: record in prepared_transactions
+  S-->>V: unsigned UserOperation
+  V->>U: review (origin, chain, Safe, recipient, amount, data, decoded ERC-20, fee or "Sponsored")
+  U->>V: approve, passkey (PRF)
+  V->>W: send-transaction { transaction, userOperation } + PRF output
+  W->>W: verify manifest, check the operation executes exactly this call, deployed, A+B, sign
+  W-->>V: signed UserOperation
+  V->>S: POST /api/aa/rpc eth_sendUserOperation
+  S->>S: found by its hash, matches the prepared op, owner signature, unexpired, claim
+  S->>N: eth_sendUserOperation (once)
+  S-->>V: userOpHash
+  loop up to 3 min
+    V->>S: eth_getUserOperationReceipt
+  end
+  V->>P: result{ ok: true, address, owner, chainId, userOpHash, transactionHash }
+```
+
+- The operation is prepared before the passkey prompt. Rejecting posts `USER_REJECTED`; nothing is signed.
+- If the operation is included but its call fails, or no receipt arrives within 3 minutes, the popup shows the hashes it has and posts `TRANSACTION_REVERTED` or `TRANSACTION_TIMEOUT`. The app does not receive the hashes in that case.
+- Error codes specific to this flow (`CALL_NOT_ALLOWED`, `INSUFFICIENT_FUNDS`, `CALL_REVERTED`, `SPONSORSHIP_REJECTED`, `NONCE_CONFLICT`, `TRANSACTION_*`, `FEES_TOO_HIGH`, `GAS_LIMIT_EXCEEDED`, `RATE_LIMITED`) are listed in [docs/INTEGRATION.md](INTEGRATION.md#errors). The server-side rules are in [docs/HTTP-API.md](HTTP-API.md).
 
 ### Failure: token rejected
 
@@ -390,7 +442,7 @@ Content-Type: application/json
 { "token": "<handoff JWT>", "origin": "<event.origin of the request>", "chainId": 11155111 }
 ```
 
-`chainId` is sent only for `deploy` and `sign`. On success:
+`chainId` is sent only for `deploy`, `sign` and `transaction`. On success:
 
 ```http
 HTTP/1.1 200 OK
@@ -437,13 +489,13 @@ The session's chain decides which network `GET /api/aa/status` and the bundler p
 - The token authorizes a session for one `sub`, one app origin and optionally one chain. Whoever obtains a live, unredeemed token can redeem it outside a browser (the `Origin` header and the reported `origin` can both be forged by a non-browser client) and obtain a session, and with it that user's share A. Share A alone does not rebuild the seed. See [docs/THREAT-MODEL.md](THREAT-MODEL.md).
 - The `origin` check proves which page sent a request only for requests delivered by a browser. It is what prevents a third-party website from using a token minted for another app.
 - The vault does not verify that the user passed a second factor: it trusts the integrator's signature.
-- A compromised integrator page can request any operation the protocol offers. The vault's review screen, which shows the verified origin, the chain and the decoded request, is the last barrier for signatures.
+- A compromised integrator page can request any operation the protocol offers. The vault's review screen, which shows the verified origin, the chain and the decoded request, is the last barrier for signatures and transactions. For a transaction it also shows the decoded ERC-20 `transfer` or `approve` when the data matches, with a caution for `approve` and for data it cannot decode.
 
 ## Server-to-server API
 
 The integrator backend reads public wallet data directly from the vault server, outside the popup protocol:
 
-- `GET /api/s2s/accounts/{sub}`, with `Authorization: Bearer <VAULT_SERVICE_TOKEN>` (compared in constant time; at least 32 characters): `{ exists, address, owner }`, plus `chainId`, `deployed`, `deployable`, `sponsored` or `chainError` with `?chainId=` (and optionally `&rpcUrl=`). `401 UNAUTHORIZED` without a valid token.
+- `GET /api/s2s/accounts/{sub}`, with `Authorization: Bearer <VAULT_SERVICE_TOKEN>` (compared in constant time; at least 32 characters): `{ exists, address, owner }`, plus `chainId`, `deployed`, `deployable`, `sponsored`, `transactionsSponsored` or `chainError` with `?chainId=` (and optionally `&rpcUrl=`). `401 UNAUTHORIZED` without a valid token.
 - `GET /api/health`: no authentication.
 
 `createVaultServiceClient` in `@wl-embedded-wallet/sdk/server` wraps the account route. Request and response details are in [docs/HTTP-API.md](HTTP-API.md) and [docs/INTEGRATION.md](INTEGRATION.md#7-server-to-server-api).

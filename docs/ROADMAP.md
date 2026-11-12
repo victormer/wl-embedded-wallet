@@ -15,9 +15,13 @@ Related documents: [README.md](../README.md), [DECISIONS.md](DECISIONS.md), [ARC
 - Generic Docker image with runtime configuration, per-deployment branding mounted at runtime, and operator documentation ([DEPLOYMENT.md](DEPLOYMENT.md), [BRANDING.md](BRANDING.md)).
 - Reproducible build of the offline tool ([REPRODUCIBLE-BUILDS.md](REPRODUCIBLE-BUILDS.md)).
 
+## Delivered since 0.1.0 (unreleased)
+
+- Sending one call from the deployed Safe (`sendTransaction`): the server builds the UserOperation and forwards it once, signed by the owner; sponsored only on chains with `sponsorTransactions: true`. See [INTEGRATION.md](INTEGRATION.md).
+
 ## Next phases
 
-1. **Sending:** submit regular UserOperations, extending the proxy policy, which today only admits the Safe deployment, built by the server. Rate limits tuned per deployment from real traffic.
+1. **Sending:** batches of calls (several calls in one UserOperation), tested against real bundlers and paymasters on public testnets. Rate limits tuned per deployment from real traffic.
 2. **Configurable:** pluggable KMS instead of `MASTER_KEY`, and gas sponsorship policies.
 3. **Release:** external security audit, published images and packages, and published recovery artifacts (see "Pending before a public release").
 
@@ -42,8 +46,6 @@ Related documents: [README.md](../README.md), [DECISIONS.md](DECISIONS.md), [ARC
 
 - Per-origin user consent the first time an app uses the wallet.
 - One key (`kid`) per app, bound to its origin, so a single app can be revoked.
-- Rate limiting on token redemption, the proxy and the demo login. There is none today, and the demo's TOTP step can be brute-forced for as long as the intermediate session lasts.
-- Rate limiting on WebAuthn challenges and relink nonces, which do not require a session or can be requested without limit. Expired rows are purged, but they occupy rows until then.
 - Notify the user on every delivery of share A. This is how the use of a stolen token would be detected, since the vault no longer asks for a second factor of its own.
 - Notify the user when their wallet is relinked to another account. Today this is only recorded in the server's audit trail.
 - Pluggable KMS instead of `MASTER_KEY` (`apps/vault/server/kms.ts` currently simulates a KMS/HSM with a local key).

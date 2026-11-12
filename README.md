@@ -44,7 +44,7 @@ flowchart LR
   Worker -- "share A, shares, chain status" --> Server
   Server -- "fetch JWKS" --> Backend
   Backend -- "s2s account lookup" --> Server
-  Server -- "restricted proxy, deployment only" --> Chain
+  Server -- "restricted proxy, server-built operations only" --> Chain
 ```
 
 - The **integrator app** never sees a share, the PRF output, the recovery code or the seed. It receives addresses and signatures.
@@ -62,7 +62,7 @@ Details, trust boundaries and per-operation data flows: [docs/ARCHITECTURE.md](d
 | `packages/sdk` | `@wl-embedded-wallet/sdk` | `/client` for browsers, `/server` for Node backends (handoff tokens, JWKS, s2s client, signature verification), `/protocol` (wire types shared with the vault) |
 | `packages/recovery-tool` | `@wl-embedded-wallet/recovery-tool` | Offline HTML tool and Node CLI, built reproducibly with esbuild over the core |
 | `apps/vault` | `@wl-embedded-wallet/vault` | The vault service (Next.js): popup UI, HTTP API, SQLite and Postgres stores, KMS stub, signer worker, static recovery page builder, Dockerfile |
-| `examples/demo` | `@wl-embedded-wallet/demo` | The public demo: a sample integrator app using only the public SDK, in the project's own brand (`brands/wl`). Register and log in with TOTP 2FA (QR code), activate, deploy, sign, verify, relink |
+| `examples/demo` | `@wl-embedded-wallet/demo` | The public demo: a sample integrator app using only the public SDK, in the project's own brand (`brands/wl`). Register and log in with TOTP 2FA (QR code), activate, deploy, sign, verify, send a transaction, relink |
 | `e2e` | `@wl-embedded-wallet/e2e` | Playwright end-to-end suites |
 | `apps/vault/tests/aa-stack` | | Real Safe and EntryPoint contracts on anvil, with a local bundler and paymaster |
 | `brands/wl` | | The project's own brand ("WL Embedded Wallet"): used by the demo and, in development, by the vault |
@@ -96,11 +96,12 @@ pnpm dev            # terminal 2: the vault and the demo
 2. **Activate the wallet.** The vault popup creates a passkey, shows the recovery code once and asks for two of its groups, then has you download the recovery tool and then the kit, and runs an A+B drill before the wallet counts as active.
 3. **Pick a network.** The address is the same on all of them.
 4. **Deploy the Safe** on that network (sponsored by the local paymaster). Signing is blocked on a network until then.
-5. **Sign** a message, EIP-712 data or a UserOperation: review it in the popup and approve with the passkey. The demo's server verifies the signature. Nothing but the deployment is sent to the chain.
-6. **Recover:** "Test unlock" runs A+B, and offers a new kit if yours is an old one. "I lost my passkey" uses A+C and creates a new set for the same Safe; with the kit you can sign and download the seed without the API; without the kit, use the passkey and the code.
-7. **Export the seed** if you want (optional, with confirmation and the passkey).
-8. **Without the service:** open `wl-embedded-wallet-recovery.html` offline with the kit and the code, or run `node packages/recovery-tool/dist/wl-embedded-wallet-recovery.mjs kit.json`.
-9. **Lost the app login:** create another account and choose "I already have a wallet": you sign with your key and the wallet moves to that account; the old one loses access.
+5. **Sign** a message (EIP-191) or EIP-712 data from its tab: review it in the popup and approve with the passkey. The demo's server verifies the signature.
+6. **Send a transaction** from the Transaction tab: a recipient, an amount in the native currency and optional calldata. The vault server builds the UserOperation, the popup shows the call and its network fee (or that it is sponsored), and after you approve it the vault sends it and the demo shows both hashes (with an explorer link where the chain has an `explorerUrl`). On the first local chain the paymaster pays the fee; on the second the Safe pays it from its own balance.
+7. **Recover:** "Test unlock" runs A+B, and offers a new kit if yours is an old one. "I lost my passkey" uses A+C and creates a new set for the same Safe; with the kit you can sign and download the seed without the API; without the kit, use the passkey and the code.
+8. **Export the seed** if you want (optional, with confirmation and the passkey).
+9. **Without the service:** open `wl-embedded-wallet-recovery.html` offline with the kit and the code, or run `node packages/recovery-tool/dist/wl-embedded-wallet-recovery.mjs kit.json`.
+10. **Lost the app login:** create another account and choose "I already have a wallet": you sign with your key and the wallet moves to that account; the old one loses access.
 
 ## Docker quickstart
 
@@ -141,7 +142,8 @@ const vault = createVaultClient({
 button.onclick = async () => {
   try {
     const { address } = await vault.activate();          // the Safe address, same on every chain
-    // later: vault.deploy(chain), vault.signMessage(chain, 'Sign in to Example App'), vault.recover(), ...
+    // later: vault.deploy(chain), vault.signMessage(chain, 'Sign in to Example App'),
+    // vault.sendTransaction({ chain, to, value }), vault.recover(), ...
   } catch (error) {
     if (error instanceof VaultError) console.warn(error.code); // POPUP_BLOCKED, POPUP_CLOSED, USER_REJECTED, ...
   }
@@ -192,7 +194,7 @@ What each suite covers and the ports it needs: [docs/TESTING.md](docs/TESTING.md
 **0.1.0, pre-audit**, plus the unreleased pre-audit fixes in [CHANGELOG.md](CHANGELOG.md#unreleased). The cryptographic design, the vault, the SDK, recovery and deployment are complete for review and covered by unit, integration and end-to-end tests. Before production use, at least these gaps must be closed:
 
 - **No real KMS.** `MASTER_KEY` lives in the server environment and a stub seals share A; share A reaches the server in plaintext over TLS at enrollment.
-- **Rate limits and sponsorship caps untuned.** The vault limits its routes per IP and per user, caps request bodies, sends HSTS and bounds each sponsored deployment, but the defaults have not been tested under real load, behind a real proxy or on L2s. Per-IP limits need `TRUSTED_PROXIES` set to your proxy, or `CLIENT_IP_SOURCE=vercel` on Vercel ([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#rate-limits)).
+- **Rate limits and sponsorship caps untuned.** The vault limits its routes per IP and per user, caps request bodies, sends HSTS and bounds each sponsored deployment and transaction, but the defaults have not been tested under real load, behind a real proxy or on L2s. Per-IP limits need `TRUSTED_PROXIES` set to your proxy, or `CLIENT_IP_SOURCE=vercel` on Vercel ([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#rate-limits)).
 - **Untested with real passkeys** (platform authenticators and their PRF support), Safari, Firefox and mobile browsers. Only Chromium with a virtual authenticator is tested.
 - **Untested against public networks** and real bundlers or paymasters; only local chains have been used.
 - **Single-region, single-database** design; backup restore untested; the `linux/amd64` image untested.

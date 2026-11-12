@@ -108,6 +108,12 @@ function checkAaChains(raw: string | undefined, allowInsecure: boolean): ConfigI
       issues.push({ variable: `${variable}.paymasterContext`, reason: 'must be an object' });
     }
     issues.push(...checkChainSponsorshipLimits(config.limits, `${variable}.limits`));
+    if (config.sponsorTransactions !== undefined && typeof config.sponsorTransactions !== 'boolean') {
+      issues.push({ variable: `${variable}.sponsorTransactions`, reason: 'must be true or false' });
+    }
+    if (config.sponsorTransactions === true && config.paymasterUrl === undefined) {
+      issues.push({ variable: `${variable}.paymasterUrl`, reason: 'is required when sponsorTransactions is true' });
+    }
     if (config.paymasterUrl !== undefined && config.bundlerUrl === undefined) {
       issues.push({ variable: `${variable}.bundlerUrl`, reason: 'is required when paymasterUrl is set' });
     }

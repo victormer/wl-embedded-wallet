@@ -142,6 +142,17 @@ describe('validateConfig', () => {
     expect(variables(chains(1))).toEqual(['AA_CHAINS.80002.nativeCurrency']);
   });
 
+  it('AA_CHAINS sponsorTransactions is a boolean, and true requires a paymaster', () => {
+    const chains = (config: Record<string, unknown>) => ({ ...VALID, AA_CHAINS: JSON.stringify({ 80002: { bundlerUrl: 'https://b.test', ...config } }) });
+    expect(validateConfig(chains({ paymasterUrl: 'https://p.test', sponsorTransactions: true }), true)).toEqual([]);
+    expect(validateConfig(chains({ paymasterUrl: 'https://p.test', sponsorTransactions: false }), true)).toEqual([]);
+    expect(validateConfig(chains({ sponsorTransactions: false }), true)).toEqual([]);
+    expect(variables(chains({ paymasterUrl: 'https://p.test', sponsorTransactions: 'true' }))).toEqual(['AA_CHAINS.80002.sponsorTransactions']);
+    expect(variables(chains({ paymasterUrl: 'https://p.test', sponsorTransactions: 1 }))).toEqual(['AA_CHAINS.80002.sponsorTransactions']);
+    expect(variables(chains({ paymasterUrl: 'https://p.test', sponsorTransactions: null }))).toEqual(['AA_CHAINS.80002.sponsorTransactions']);
+    expect(variables(chains({ sponsorTransactions: true }))).toEqual(['AA_CHAINS.80002.paymasterUrl']);
+  });
+
   it('a message never contains the secrets or the database URL', () => {
     const issues = validateConfig({ ...VALID, MASTER_KEY: 'topsecret', DATABASE_URL: 'mysql://user:topsecret@db', ORIGIN: 'http://topsecret.test' }, true);
     expect(issues.length).toBeGreaterThan(0);

@@ -160,7 +160,7 @@ async function waitForRpc(url) {
   throw new Error('anvil is not responding');
 }
 
-async function startChain({ chainId, port, withContracts, sponsored = true, bindHost = '127.0.0.1' }) {
+async function startChain({ chainId, port, withContracts, sponsored = true, sponsorTransactions = false, bindHost = '127.0.0.1' }) {
   const rpcUrl = `http://127.0.0.1:${port}`;
   const anvil = spawn('anvil', ['--host', bindHost, '--port', String(port), '--chain-id', String(chainId), '--silent'], { stdio: 'ignore' });
   await waitForRpc(rpcUrl);
@@ -188,6 +188,7 @@ async function startChain({ chainId, port, withContracts, sponsored = true, bind
       const paymasterPort = port + 2000;
       servers.push(await rpcServer(paymasterPort, paymasterMethods(publicClient, signer, paymaster, chainId, requests), bindHost));
       info.paymasterUrl = `http://127.0.0.1:${paymasterPort}`;
+      info.sponsorTransactions = sponsorTransactions;
     }
   }
   info.stop = async () => {
@@ -198,7 +199,7 @@ async function startChain({ chainId, port, withContracts, sponsored = true, bind
 }
 
 /**
- * Each chain: `{ chainId, port, withContracts, sponsored }`. Without `withContracts` it is a chain
+ * Each chain: `{ chainId, port, withContracts, sponsored, sponsorTransactions }`. Without `withContracts` it is a chain
  * with no factory: the vault must reject it as `CHAIN_NOT_SUPPORTED`.
  */
 export async function startAaStack(chains) {
@@ -218,6 +219,7 @@ export function aaChainsConfig(chains, { includeRpc = false } = {}) {
           ...(includeRpc ? { rpcUrl: chain.rpcUrl } : {}),
           bundlerUrl: chain.bundlerUrl,
           ...(chain.paymasterUrl ? { paymasterUrl: chain.paymasterUrl, paymasterContext: { sponsorshipPolicyId: 'test-policy' } } : {}),
+          ...(chain.paymasterUrl && chain.sponsorTransactions ? { sponsorTransactions: true } : {}),
         },
       ]),
   );

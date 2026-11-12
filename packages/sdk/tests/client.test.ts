@@ -462,6 +462,11 @@ describe('createVaultClient', () => {
     const ACCOUNT = { ok: true, address: ADDRESS, owner: OWNER };
     const SIGNED = { ...ACCOUNT, signature: SIGNATURE };
     const SIGNED_OP = { ...SIGNED, userOperation: SIGNED_USER_OPERATION };
+    const SENT = { ...ACCOUNT, chainId: CHAIN.chainId, userOpHash: USER_OP_HASH, transactionHash: TRANSACTION_HASH };
+    const sentWithout = (field: string) => {
+      const { [field]: _removed, ...rest } = SENT as Record<string, unknown>;
+      return rest;
+    };
     const op = (changes: Record<string, unknown>) => ({ ...SIGNED_OP, userOperation: { ...SIGNED_USER_OPERATION, ...changes } });
     const withoutField = (field: string) => {
       const { [field]: _removed, ...rest } = SIGNED_USER_OPERATION as Record<string, unknown>;
@@ -478,6 +483,7 @@ describe('createVaultClient', () => {
       signMessage: (c) => c.signMessage(CHAIN, 'hello'),
       signTypedData: (c) => c.signTypedData(CHAIN, typedData),
       signUserOperation: (c) => c.signUserOperation(CHAIN, userOperation),
+      sendTransaction: (c) => c.sendTransaction({ chain: CHAIN, to: ADDRESS, value: 1n }),
     };
     const valid: Record<string, Record<string, unknown>> = {
       activate: ACCOUNT,
@@ -489,6 +495,7 @@ describe('createVaultClient', () => {
       signMessage: SIGNED,
       signTypedData: SIGNED,
       signUserOperation: SIGNED_OP,
+      sendTransaction: SENT,
     };
 
     // Shapes that are malformed for every action.
@@ -532,6 +539,15 @@ describe('createVaultClient', () => {
       ['signUserOperation', 'a factory that is not an address', op({ factory: '0x1234' })],
       ['signUserOperation', 'callData that is not hex', op({ callData: 'abcdef' })],
       ['signUserOperation', 'paymasterData that is not hex', op({ paymasterData: '0xz' })],
+      ['sendTransaction', 'no userOpHash', sentWithout('userOpHash')],
+      ['sendTransaction', 'no transactionHash', sentWithout('transactionHash')],
+      ['sendTransaction', 'a userOpHash that is not 32 bytes', { ...SENT, userOpHash: '0xaa' }],
+      ['sendTransaction', 'a transactionHash that is 31 bytes', { ...SENT, transactionHash: `0x${'bb'.repeat(31)}` }],
+      ['sendTransaction', 'a transactionHash that is not hex', { ...SENT, transactionHash: `0x${'zz'.repeat(32)}` }],
+      ['sendTransaction', 'a null hash', { ...SENT, userOpHash: null }],
+      ['sendTransaction', 'no chainId', sentWithout('chainId')],
+      ['sendTransaction', 'another chainId', { ...SENT, chainId: CHAIN.chainId + 1 }],
+      ['sendTransaction', 'a chainId that is a string', { ...SENT, chainId: String(CHAIN.chainId) }],
     ];
     const cases: [string, string, Record<string, unknown>][] = [
       ...Object.keys(actions).flatMap((action) => common.map(([name, body]) => [action, name, body] as [string, string, Record<string, unknown>])),
@@ -658,6 +674,106 @@ describe('createVaultClient', () => {
     it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 31, '1000'])('rejects timeoutMs %s when the client is created', (timeoutMs) => {
       const host = setup().host;
       expect(() => createVaultClient({ vaultOrigin: ORIGIN, getToken: async () => 't', host, timeoutMs: timeoutMs as number })).toThrow(RangeError);
+    });
+  });
+
+  describe('sendTransaction', () => {
+    const TO = `0x${'cc'.repeat(20)}` as const;
+    const SENT = { ok: true, address: ADDRESS, owner: OWNER, chainId: CHAIN.chainId, userOpHash: USER_OP_HASH, transactionHash: TRANSACTION_HASH };
+    type Request = Parameters<ReturnType<typeof setup>['client']['sendTransaction']>[0];
+
+    async function posted(request: Request) {
+      const context = setup();
+      const promise = context.client.sendTransaction(request);
+      context.dispatch(READY);
+      await context.flush();
+      return { ...context, promise, message: context.popup.sent[0].message };
+    }
+
+    it('opens /transaction and posts the call with only the chainId', async () => {
+      const chain = { chainId: CHAIN.chainId, rpcUrl: 'https://rpc.example' };
+      const { open, getToken, message, promise, dispatch } = await posted({ chain, to: TO, value: 5n, data: '0xa9059cbb' });
+      expect(open).toHaveBeenCalledWith(`${ORIGIN}/transaction`, VAULT_WINDOW_NAME, expect.any(String));
+      expect(getToken).toHaveBeenCalledWith(chain);
+      expect(message.action).toEqual({ kind: 'transaction', chain: { chainId: CHAIN.chainId }, transaction: { to: TO, value: '5', data: '0xa9059cbb' } });
+      expect(JSON.stringify(message)).not.toContain('rpc.example');
+      dispatch(result(message.id, SENT));
+      await expect(promise).resolves.toEqual({ address: ADDRESS, owner: OWNER, chainId: CHAIN.chainId, userOpHash: USER_OP_HASH, transactionHash: TRANSACTION_HASH });
+    });
+
+    it.each([
+      ['a bigint value', { value: 10n ** 18n }, { value: '1000000000000000000' }],
+      ['a decimal string value', { value: '42' }, { value: '42' }],
+      ['no value', {}, { value: '0' }],
+      ['a zero bigint', { value: 0n }, { value: '0' }],
+      ['the maximum uint256', { value: (1n << 256n) - 1n }, { value: ((1n << 256n) - 1n).toString() }],
+      ['empty data, which is dropped', { data: '0x' }, { value: '0' }],
+      ['uppercase hex data', { data: '0xABCDEF' }, { value: '0', data: '0xABCDEF' }],
+    ] as [string, Partial<Request>, Record<string, string>][])('normalizes %s', async (_label, input, expected) => {
+      const { message } = await posted({ chain: CHAIN, to: TO, ...input });
+      expect((message.action as { transaction: unknown }).transaction).toEqual({ to: TO, ...expected });
+    });
+
+    it.each([
+      ['a short to', { to: '0x1234' }],
+      ['a to without 0x', { to: 'cc'.repeat(20) }],
+      ['a missing to', { to: undefined }],
+      ['a negative bigint value', { value: -1n }],
+      ['a negative string value', { value: '-1' }],
+      ['a hex value', { value: '0x10' }],
+      ['a float value', { value: '1.5' }],
+      ['a number value', { value: 1 }],
+      ['a value with leading zeros', { value: '01' }],
+      ['a bigint value above 2^256-1', { value: 1n << 256n }],
+      ['a string value above 2^256-1', { value: (1n << 256n).toString() }],
+      ['odd-length data', { data: '0x123' }],
+      ['data that is not hex', { data: '0xzz' }],
+      ['data without 0x', { data: 'abcd' }],
+      ['no chain', { chain: undefined }],
+      ['a chainId of 0', { chain: { chainId: 0 } }],
+      ['a fractional chainId', { chain: { chainId: 1.5 } }],
+      ['a string chainId', { chain: { chainId: '1' } }],
+    ] as [string, Record<string, unknown>][])('INVALID_REQUEST without opening the popup for %s', async (_label, changes) => {
+      const { client, open, getToken, listeners } = setup();
+      const request = { chain: CHAIN, to: TO, value: 1n, ...changes } as unknown as Request;
+      const promise = client.sendTransaction(request);
+      expect(open).not.toHaveBeenCalled();
+      await expect(promise).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+      await expect(promise).rejects.toBeInstanceOf(VaultError);
+      expect(getToken).not.toHaveBeenCalled();
+      expect(listeners.size).toBe(0);
+    });
+
+    it('INVALID_REQUEST for a request that is not an object', async () => {
+      const { client, open } = setup();
+      await expect(client.sendTransaction(null as unknown as Request)).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+      expect(open).not.toHaveBeenCalled();
+    });
+
+    it('a malformed request does not supersede the pending operation', async () => {
+      const { client, popup, dispatch, flush } = setup();
+      const pending = client.activate();
+      await expect(client.sendTransaction({ chain: CHAIN, to: '0x12' as `0x${string}` })).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+      dispatch(READY);
+      await flush();
+      dispatch(result(popup.sent[0].message.id, { ok: true, address: ADDRESS, owner: OWNER }));
+      await expect(pending).resolves.toEqual({ address: ADDRESS, owner: OWNER });
+    });
+
+    it('drops fields the action does not define', async () => {
+      const { message, promise, dispatch } = await posted({ chain: CHAIN, to: TO });
+      dispatch(result(message.id, { ...SENT, signature: SIGNATURE, userOperation: SIGNED_USER_OPERATION, mnemonic: 'never' }));
+      const resolved = await promise;
+      expect(resolved).toEqual({ address: ADDRESS, owner: OWNER, chainId: CHAIN.chainId, userOpHash: USER_OP_HASH, transactionHash: TRANSACTION_HASH });
+      expect(Object.keys(resolved).sort()).toEqual(['address', 'chainId', 'owner', 'transactionHash', 'userOpHash']);
+    });
+
+    it.each(['TRANSACTION_REVERTED', 'USER_REJECTED', 'WALLET_NOT_DEPLOYED', 'CALL_NOT_ALLOWED'])('propagates %s from the vault', async (code) => {
+      const { message, promise, dispatch, listeners } = await posted({ chain: CHAIN, to: TO, value: '1' });
+      dispatch(result(message.id, { ok: false, code }));
+      await expect(promise).rejects.toMatchObject({ code });
+      await expect(promise).rejects.toBeInstanceOf(VaultError);
+      expect(listeners.size).toBe(0);
     });
   });
 });

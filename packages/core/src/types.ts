@@ -1,5 +1,5 @@
 import { WalletError, type WalletErrorCode } from './errors';
-import type { UserOperationJson, VaultSignRequest } from './operations';
+import type { UserOperationJson, VaultCall, VaultSignRequest } from './operations';
 import type { SmartAccountInfo } from './safe';
 
 export { WalletError };
@@ -135,6 +135,20 @@ export type DeployWorkerRequest = {
   userOperation: UserOperationJson;
 };
 
+/**
+ * Signs a UserOperation the vault server prepared for one call from the deployed Safe. The worker checks that the
+ * operation executes exactly `transaction` (a CALL, never a delegatecall) from this Safe before using the seed.
+ */
+export type SendTransactionWorkerRequest = {
+  op: 'send-transaction';
+  chainId: number;
+  signed: SignedManifest;
+  encB: Envelope;
+  prf: Uint8Array;
+  transaction: VaultCall;
+  userOperation: UserOperationJson;
+};
+
 /** Optional seed export. Together with `export-recovered`, the only operations whose response carries `mnemonic`. */
 export type ExportWorkerRequest = {
   op: 'export';
@@ -188,6 +202,7 @@ export type WorkerRequest =
   | RecoverRequest
   | SignWorkerRequest
   | DeployWorkerRequest
+  | SendTransactionWorkerRequest
   | ExportWorkerRequest
   | SignRecoveredWorkerRequest
   | ExportRecoveredWorkerRequest
@@ -212,6 +227,7 @@ export function secretBuffersOf(request: WorkerRequest): Uint8Array[] {
       return [request.prf, request.code, ...(request.source ? ofSource(request.source) : [])];
     case 'sign':
     case 'deploy':
+    case 'send-transaction':
     case 'export':
       return [request.prf];
     case 'recover':
@@ -291,7 +307,10 @@ export interface ChainStatus {
   rpcHost: string;
   deployed: boolean;
   deployable: boolean;
+  /** The deployment is sponsored: the chain has a paymaster. */
   sponsored: boolean;
+  /** Transactions from the deployed Safe are sponsored too: a paymaster and `sponsorTransactions` in `AA_CHAINS`. */
+  transactionsSponsored: boolean;
   bundler: boolean;
   balance: string | null;
 }

@@ -3,7 +3,9 @@ import { wordlist } from '@scure/bip39/wordlists/english.js';
 import { splitMnemonic } from '@tetherto/wdk-utils';
 import {
   buildUserOperation,
+  isAllowedTransactionCall,
   isDeploymentOperation,
+  isTransactionOperation,
   requestHash,
   safeMessageTypedData,
   signSafeOperation,
@@ -45,6 +47,7 @@ import {
   type RecoverKitCode,
   type RecoverRequest,
   type SeedBackup,
+  type SendTransactionWorkerRequest,
   type ShareName,
   type SignedManifest,
   type SignRecoveredWorkerRequest,
@@ -286,6 +289,31 @@ async function deploy(req: DeployWorkerRequest, deps: SignerDeps): Promise<Worke
   };
 }
 
+/**
+ * Only signs an operation that executes exactly the reviewed call from this deployed Safe. The server chose nonce,
+ * gas, fees and paymaster, which the page showed; the call itself is checked here, before the seed exists.
+ */
+async function sendTransaction(req: SendTransactionWorkerRequest, deps: SignerDeps): Promise<WorkerResponse> {
+  const { signed, encB, prf, chainId, transaction, userOperation } = req;
+  verifyManifest(signed, deps.manifestPubKey);
+  const { manifest } = signed;
+  assertSmartAccount(manifest);
+  const safe = manifest.smartAccount.address;
+  if (!isAllowedTransactionCall(safe, transaction)) throw new WalletError('CALL_NOT_ALLOWED');
+  if (!isTransactionOperation(userOperation as UserOperationJson, transaction, safe, manifest.smartAccount)) throw new WalletError('INTERNAL');
+  const status = await assertChain(chainId, deps);
+  if (!status.deployed) throw new WalletError('WALLET_NOT_DEPLOYED');
+  const mnemonic = await recoverSeed({ op: 'recover', combo: 'A+B', signed, encB, prf }, deps);
+  const signature = (await signSafeOperation(userOperation, chainId, manifest.smartAccount, ownerSigner(mnemonic).signer)) as `0x${string}`;
+  return {
+    ok: true,
+    ...identity(manifest),
+    wdkVersionMismatch: manifest.wdkUtilsVersion !== WDK_UTILS_VERSION,
+    signature,
+    userOperation: { ...userOperation, signature },
+  };
+}
+
 /** Same checks as `sign`. Only this response (and `export-recovered`'s) carries the seed, and only the vault's main thread uses it. */
 async function exportSeed(req: ExportWorkerRequest, deps: SignerDeps): Promise<WorkerResponse> {
   const { signed, encB, prf } = req;
@@ -357,6 +385,7 @@ export async function handleWorkerRequest(req: WorkerRequest, deps: SignerDeps):
     if (req.op === 'enroll') return await enroll(req, deps);
     if (req.op === 'sign') return await sign(req, deps);
     if (req.op === 'deploy') return await deploy(req, deps);
+    if (req.op === 'send-transaction') return await sendTransaction(req, deps);
     if (req.op === 'export') return await exportSeed(req, deps);
     if (req.op === 'sign-recovered') return await signRecovered(req, deps);
     if (req.op === 'export-recovered') return await exportRecovered(req, deps);

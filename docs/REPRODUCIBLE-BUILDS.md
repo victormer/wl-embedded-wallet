@@ -7,8 +7,8 @@ Related documents: [RECOVERY.md](RECOVERY.md) (how users use the tool), [DEPLOYM
 ## Published hashes (0.1.0)
 
 ```
-727c759057868ec3ed551bfc0a2060d302947ff645733bc8ba2ec9961c6f5f39  wl-embedded-wallet-recovery.html
-4fee01d7f9d94a82a04e3f0e965c7cd218202536795dc557c325e2837333fd1e  wl-embedded-wallet-recovery.mjs
+6bd51cd1c1e3ab35a3b3a25c9d471f84a28fef4291ac58bd5a7cf64a5215dd63  wl-embedded-wallet-recovery.html
+7324cf1edfc3c3ba81657f8112b231db633fbd9187ae06de689fb35ea75f7803  wl-embedded-wallet-recovery.mjs
 ```
 
 These lines use the `sha256sum` format (hash, two spaces, file name), the same as `packages/recovery-tool/dist/SHA256SUMS`. The unit test `packages/recovery-tool/tests/html.test.ts` fails if the HTML hash above does not match the current build, so this document and the code cannot silently diverge.

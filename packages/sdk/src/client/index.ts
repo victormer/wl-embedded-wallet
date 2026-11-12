@@ -4,6 +4,7 @@ import {
   type TypedDataRequest,
   type UserOperationJson,
   type UserOperationRequest,
+  type VaultCall,
   type VaultChain,
   type VaultAction,
   type VaultRequest,
@@ -18,6 +19,7 @@ const CLOSED_POLL_MS = 500;
 const MAX_TIMEOUT_MS = 2_147_483_647;
 
 export type VaultErrorCode =
+  | 'INVALID_REQUEST'
   | 'POPUP_BLOCKED'
   | 'POPUP_CLOSED'
   | 'TOKEN_UNAVAILABLE'
@@ -41,6 +43,17 @@ export type VaultAccount = { address: `0x${string}`; owner: `0x${string}` };
 export type VaultSignature = VaultAccount & { signature: `0x${string}` };
 export type VaultUserOperationSignature = VaultSignature & { userOperation: UserOperationJson };
 export type VaultDeployment = VaultAccount & { userOpHash?: `0x${string}`; transactionHash?: `0x${string}` };
+
+/** One call from the user's deployed Safe. `value` is in wei (default 0) and is paid by the Safe itself. */
+export interface VaultTransactionRequest {
+  chain: VaultChain;
+  to: `0x${string}`;
+  value?: bigint | string;
+  data?: `0x${string}`;
+}
+
+/** The UserOperation was included on-chain and its call succeeded. */
+export type VaultTransactionResult = VaultAccount & { chainId: number; userOpHash: `0x${string}`; transactionHash: `0x${string}` };
 
 export interface VaultPopup {
   closed: boolean;
@@ -80,6 +93,13 @@ export interface VaultClient {
   signMessage(chain: VaultChain, message: string): Promise<VaultSignature>;
   signTypedData(chain: VaultChain, typedData: TypedDataRequest): Promise<VaultSignature>;
   signUserOperation(chain: VaultChain, userOperation: UserOperationRequest): Promise<VaultUserOperationSignature>;
+  /**
+   * Sends one call from the user's Safe, which must already be deployed on `chain`. The vault server builds the
+   * UserOperation (nonce, gas, fees and, where the vault sponsors transactions on that chain, the paymaster); the user
+   * reviews and approves it in the vault, which waits for the receipt. Rejects with `INVALID_REQUEST` before opening the
+   * popup if the call is malformed.
+   */
+  sendTransaction(request: VaultTransactionRequest): Promise<VaultTransactionResult>;
   unlock(): Promise<VaultAccount>;
   recover(): Promise<VaultAccount>;
   /** Opens the export flow in the vault. The seed never reaches the SDK. */
@@ -147,6 +167,34 @@ const parseDeployment: ResultParser<VaultDeployment> = (data) => {
   if (!isHash(data.userOpHash) || !isHash(data.transactionHash)) return null;
   return { ...account, userOpHash: data.userOpHash, transactionHash: data.transactionHash };
 };
+
+// The receipt of a sent call: both hashes, and the network it was asked for.
+const parseTransaction =
+  (chainId: number): ResultParser<VaultTransactionResult> =>
+  (data) => {
+    const account = parseAccount(data);
+    if (!account || data.chainId !== chainId || !isHash(data.userOpHash) || !isHash(data.transactionHash)) return null;
+    return { ...account, chainId, userOpHash: data.userOpHash, transactionHash: data.transactionHash };
+  };
+
+const MAX_UINT256 = (1n << 256n) - 1n;
+
+/** The call as the vault expects it (`value` in decimal wei, no empty `data`), or `null` if it is malformed. */
+function toVaultCall(request: VaultTransactionRequest): VaultCall | null {
+  if (!isRecord(request) || !isAddress(request.to)) return null;
+  const raw = request.value ?? '0';
+  let value: bigint;
+  if (typeof raw === 'bigint') value = raw;
+  else if (isQuantity(raw)) value = BigInt(raw);
+  else return null;
+  if (value < 0n || value > MAX_UINT256) return null;
+  if (request.data !== undefined && !isBytes(request.data)) return null;
+  return { to: request.to, value: value.toString(), ...(request.data && request.data !== '0x' ? { data: request.data } : {}) };
+}
+
+function isChain(chain: unknown): chain is VaultChain {
+  return isRecord(chain) && typeof chain.chainId === 'number' && Number.isSafeInteger(chain.chainId) && chain.chainId > 0;
+}
 
 const parseSignature: ResultParser<VaultSignature> = (data) => {
   const account = parseAccount(data);
@@ -297,5 +345,11 @@ export function createVaultClient({ vaultOrigin, getToken, timeoutMs, host }: Va
     signMessage: (chain, message) => sign(chain, { kind: 'message', message }, parseSignature),
     signTypedData: (chain, typedData) => sign(chain, { kind: 'typedData', typedData }, parseSignature),
     signUserOperation: (chain, userOperation) => sign(chain, { kind: 'userOperation', userOperation }, parseUserOperationSignature),
+    sendTransaction: (request) => {
+      const transaction = toVaultCall(request);
+      if (!transaction || !isChain(request.chain)) return Promise.reject(new VaultError('INVALID_REQUEST'));
+      const { chain } = request;
+      return run({ kind: 'transaction', chain: { chainId: chain.chainId }, transaction }, parseTransaction(chain.chainId), chain);
+    },
   };
 }

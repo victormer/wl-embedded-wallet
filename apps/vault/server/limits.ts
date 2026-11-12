@@ -47,7 +47,7 @@ function isSet(value: string | undefined): value is string {
 
 /* Rate limits */
 
-export type RateLimitScope = 'handoff' | 'share-a' | 'recovery-challenge' | 'recovery-assertion' | 'relink-nonce' | 'relink' | 'aa' | 's2s' | 'enroll';
+export type RateLimitScope = 'handoff' | 'share-a' | 'recovery-challenge' | 'recovery-assertion' | 'relink-nonce' | 'relink' | 'aa' | 'transaction' | 's2s' | 'enroll';
 
 export interface RateLimitRule {
   windowMs: number;
@@ -68,6 +68,8 @@ const DEFAULT_RATE_LIMITS: Record<RateLimitScope, { ip: number | null; sub: numb
   'relink-nonce': { ip: 10, sub: 5 },
   relink: { ip: 10, sub: 5 },
   aa: { ip: 240, sub: 120 },
+  // `vault_prepareTransaction` only, on top of `aa`: each one may be sponsored by the paymaster.
+  transaction: { ip: 30, sub: 10 },
   s2s: { ip: 600, sub: 60 },
   enroll: { ip: 20, sub: 10 },
 };

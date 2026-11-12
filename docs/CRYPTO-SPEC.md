@@ -425,6 +425,7 @@ Operation-specific gates, all inside the worker:
 | `recover` | any | none (returns address and owner only) |
 | `sign` | A+B | Request shape; chain status fetched by the worker from the server must have the requested `chainId` (`CHAIN_MISMATCH`) and `deployed: true` (`WALLET_NOT_DEPLOYED`), checked **before** reconstruction |
 | `deploy` | A+B | Manifest signature and Safe recomputation; chain status not deployed and deployable (`CHAIN_NOT_SUPPORTED`); the UserOperation must be exactly this owner's Safe deployment (`isDeploymentOperation`, `INTERNAL` otherwise); only then reconstruction |
+| `send-transaction` | A+B | Manifest signature and Safe recomputation; a call to the Safe with data is refused (`CALL_NOT_ALLOWED`); the UserOperation must execute exactly the reviewed call from this Safe with no factory (`isTransactionOperation`, `INTERNAL` otherwise); chain status must have the requested `chainId` (`CHAIN_MISMATCH`) and `deployed: true` (`WALLET_NOT_DEPLOYED`); only then reconstruction |
 | `export` | A+B | Returns the mnemonic to the vault page |
 | `sign-recovered` | B+C or kit+code | `chainId` a positive safe integer; no chain or server check |
 | `export-recovered` | B+C or kit+code | Returns the mnemonic to the vault page |
@@ -524,6 +525,10 @@ The parameters and the resulting address are signed into each manifest (`smartAc
 
 `buildDeploymentOperation(owner, fees, params)`: `sender` = predicted Safe, `nonce = 0`, `factory` and `factoryData` from `SafeAccountV0_3_0.createFactoryAddressAndData([owner], overrides)`, `callData` = the Safe 4337 module's execute call for a single empty zero-value call to the Safe itself (`deploymentCalls`), paymaster fields unset, and abstractionkit's dummy signature for estimation. `isDeploymentOperation` accepts an operation only if `sender`, `factory`, `factoryData`, `callData` match exactly and `nonce` is 0 (quantities in decimal or hex). Gas and paymaster fields are not constrained by this check.
 
+### Transaction UserOperation
+
+`buildTransactionOperation(safe, call, nonce, fees, params)`: `sender` = the deployed Safe, `factory` and `factoryData` null, the EntryPoint nonce for key 0 (`getNonce(safe, 0)`, read by the server), `callData` = `encodeSafeCalls([call])`, which for one call is the Safe 4337 module's `executeUserOpWithErrorString(to, value, data, 0)` (operation 0, a CALL), paymaster fields unset, and the dummy signature for estimation. `isTransactionOperation(operation, call, safe)` accepts an operation only if `sender` is the Safe, there is no factory, and `callData` equals exactly that encoding of `call`; nonce, gas, fee and paymaster fields are not constrained by it. `isAllowedTransactionCall(safe, call)` refuses a call whose `to` is the Safe itself with non-empty `data`.
+
 ## 18. Signatures
 
 All signatures are produced by the owner key in the worker.
@@ -550,17 +555,21 @@ This is Safe's `SafeMessage` scheme: a verifier calls `isValidSignature(bytes32 
 
 For `{ kind: "userOperation", userOperation }` (a deployed Safe only; the request schema has no `factory` field):
 
-1. `operation = buildUserOperation(safe, request, params)`: `sender = safe`, `factory`/`factoryData` null, `callData` = `executeUserOp` for one call or a `multiSend` batch (up to 16 calls) through `multisend`, the requested nonce and gas fields, paymaster fields null.
+1. `operation = buildUserOperation(safe, request, params)`: `sender = safe`, `factory`/`factoryData` null, `callData` = `executeUserOpWithErrorString` for one call or a `multiSend` batch (up to 16 calls) through `multisend`, the requested nonce and gas fields, paymaster fields null.
 2. The owner signs the Safe 4337 module's EIP-712 `SafeOp` hash (`safeOperationHash`, abstractionkit `getUserOperationEip712Hash`), whose domain is `{ chainId, verifyingContract: safe4337Module }` and whose type is `SafeOp(address safe,uint256 nonce,bytes initCode,bytes callData,uint128 verificationGasLimit,uint128 callGasLimit,uint256 preVerificationGas,uint128 maxPriorityFeePerGas,uint128 maxFeePerGas,bytes paymasterAndData,uint48 validAfter,uint48 validUntil,address entryPoint)`.
 3. The UserOperation signature is `validAfter (6 bytes) || validUntil (6 bytes) || ECDSA signature (65 bytes)`, 77 bytes in total, with `validAfter = validUntil = 0` (abstractionkit `signUserOperationWithSigners`).
 
-The vault returns both the signature and the full UserOperation it signed. A verifier must check `userOperationMatches(operation, request, safe)` (same sender, no factory, same callData, same nonce and gas quantities, no paymaster) and `recoverSafeOperationSigner(operation, chainId)` (which strips the first 12 bytes) equals the owner. Nothing is submitted to a bundler by the vault for these signatures; only the Safe deployment is sent.
+The vault returns both the signature and the full UserOperation it signed. A verifier must check `userOperationMatches(operation, request, safe)` (same sender, no factory, same callData, same nonce and gas quantities, no paymaster) and `recoverSafeOperationSigner(operation, chainId)` (which strips the first 12 bytes) equals the owner. Nothing is submitted to a bundler by the vault for these signatures; only the Safe deployment and transactions ([below](#transactions)) are sent.
 
 `userOperationHash` (the ERC-4337 EntryPoint hash) and `toRpcUserOperation` (ERC-7769 JSON-RPC shape with hex quantities) are also exported for integrators.
 
 ### Deployment
 
-The deployment operation is signed the same way (SafeOp EIP-712), after the vault's own client filled in paymaster data and gas limits through the server proxy, and is sent to the bundler by the vault.
+The deployment operation is signed the same way (SafeOp EIP-712), after the vault server built it (fees, gas limits and paymaster data), and is sent to the bundler by the vault.
+
+### Transactions
+
+The worker operation `send-transaction` receives the reviewed `transaction` (`{ to, value, data? }`) and the UserOperation the vault server prepared for it. Before reconstruction it verifies the manifest and the Safe, refuses a call to the Safe with data (`CALL_NOT_ALLOWED`), requires `isTransactionOperation(operation, transaction, safe)` (`INTERNAL` otherwise), and requires the chain status to report the Safe deployed (`WALLET_NOT_DEPLOYED`). It then reconstructs with A+B and signs the SafeOp hash exactly as above, over the whole operation, including the nonce, gas, fee and paymaster fields the server chose. The vault sends it to the bundler.
 
 ## 19. Relink authorization
 

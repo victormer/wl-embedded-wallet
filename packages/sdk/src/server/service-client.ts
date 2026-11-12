@@ -23,7 +23,10 @@ export type VaultServiceAccount =
       /** `null` when it could not be checked on that chain; `chainError` says why. */
       deployed?: boolean | null;
       deployable?: boolean;
+      /** The deployment on that chain is sponsored. */
       sponsored?: boolean;
+      /** Transactions from the deployed Safe on that chain are sponsored too (`sponsorTransactions` in the vault). */
+      transactionsSponsored?: boolean;
       chainError?: string;
     };
 

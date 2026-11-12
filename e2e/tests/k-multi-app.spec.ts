@@ -51,6 +51,7 @@ test.describe('K · several apps with the same login', () => {
     await expect(h.T('wallet-owner')).toHaveText(account.owner);
     await h.selectChain(CHAIN_A, 'true');
 
+    await h.openTab('message');
     await h.T('sign-message-submit').click();
     await h.P('sign-review').waitFor();
     await expect(h.P('sign-origin')).toHaveText(APP2);

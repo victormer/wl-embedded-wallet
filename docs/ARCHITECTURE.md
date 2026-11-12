@@ -63,8 +63,8 @@ flowchart LR
   API --- KMS
   API --- DB
   API -- "restricted proxy" --> RPC
-  API -- "deployment only" --> Bundler
-  API -- "deployment only" --> Paymaster
+  API -- "server-built operations only" --> Bundler
+  API -- "server-built operations only" --> Paymaster
   Bundler --> Safe
   Kit --> Tool
 ```
@@ -86,7 +86,7 @@ The same picture in plain text:
   | Integrator backend        | <------------> | Vault server (apps/vault)      |
   | Login + 2FA               |                | SQLite/Postgres, KMS stub      |
   | sdk/server: handoff JWT   |                | Proxy to bundler and paymaster |
-  +---------------------------+                | (allowlist, deployment only)   |
+  +---------------------------+                | (allowlist, server-built ops)  |
                                                +---------------+----------------+
                                                                |
                                                RPC / bundler / paymaster (per chain)
@@ -98,7 +98,7 @@ The same picture in plain text:
 
 | Actor | What they do with the system |
 |---|---|
-| **End user** | Has an account in the integrator app. Reaches the vault only in a popup, for short, sensitive tasks: activate the wallet (passkey, recovery code, kit), deploy the Safe on a chain, review and approve a signature, unlock, recover, link the wallet to another account, or export the seed. Their question is always "what am I approving, and what must I keep?" |
+| **End user** | Has an account in the integrator app. Reaches the vault only in a popup, for short, sensitive tasks: activate the wallet (passkey, recovery code, kit), deploy the Safe on a chain, review and approve a signature or a transaction, unlock, recover, link the wallet to another account, or export the seed. Their question is always "what am I approving, and what must I keep?" |
 | **User without the service** | Opens the static recovery page or the offline tool with their kit and code because the backend is down or gone. |
 | **Operator** | Deploys the vault image with their own Postgres, domain, keys and brand, configured entirely at runtime. |
 | **Integrator** | Runs the app and its backend: authenticates users (with 2FA), mints handoff tokens, publishes a JWKS, embeds the SDK. |
@@ -127,7 +127,7 @@ All workspace packages are `private` and version `0.1.0`; nothing is published t
 - **`packages/sdk` is the only thing an integrator needs.** Its `/client` entry runs in the integrator's browser and knows nothing about keys; `/server` runs in the integrator's Node backend and mints tokens, serves the JWKS and verifies signatures; `/protocol` is the shared wire contract (`postMessage` message types and the protocol tag), imported by both the SDK and the vault so the two cannot drift.
 - **`packages/recovery-tool` is separate** because its output must be byte-for-byte reproducible and identical for every deployment, independent of the vault's build, brand and configuration. Its published SHA-256 lets users check what they downloaded ([REPRODUCIBLE-BUILDS.md](REPRODUCIBLE-BUILDS.md)).
 - **`apps/vault` is the only deployable service.** It contains everything that is specific to running the vault: the popup pages, the HTTP API, persistence, the KMS stub, the worker entry point, the brand loader and the static recovery page builder. Its image contains no configuration.
-- **`examples/demo` uses only the public SDK** (`@wl-embedded-wallet/sdk/client` and `/server`), so it doubles as a test that the SDK is sufficient. It is a sample (register and log in with TOTP 2FA and a QR code, activate, deploy, sign, verify, relink), not part of the product, and is not in the vault image.
+- **`examples/demo` uses only the public SDK** (`@wl-embedded-wallet/sdk/client` and `/server`), so it doubles as a test that the SDK is sufficient. It is a sample (register and log in with TOTP 2FA and a QR code, activate, deploy, sign, verify, send a transaction, relink), not part of the product, and is not in the vault image.
 - **Separate hosts in development** (`app.localhost:3200` and `vault.localhost:3201`) rather than two ports on `localhost`, because two ports on one host share cookies and the RP ID, which would not exercise origin isolation.
 
 ## Dependency direction
@@ -163,9 +163,9 @@ Nothing depends on `apps/vault` or `examples/demo`. The core never imports from 
 |---|---|---|---|
 | SDK client | Integrator page | `packages/sdk/src/client` | Opens the popup from a user gesture, answers `ready` with a fresh token and the request, accepts one `result` from the exact vault origin and popup window |
 | Integrator backend | Integrator server | `packages/sdk/src/server`, `examples/demo/server` | Authenticates the user, mints the handoff JWT (60 s, single use), publishes the JWKS, queries `/api/s2s/accounts/{sub}`, verifies returned signatures |
-| Vault popup page | Vault origin, main thread | `apps/vault/app/*`, `apps/vault/lib/*` | Receives the request (`lib/vault-channel.ts`), redeems the token, shows review screens, runs WebAuthn (`lib/prf.ts`), generates and shows the recovery code, downloads the tool, the kit and the seed file, drives deployment through the proxy (`lib/aa-client.ts`) |
+| Vault popup page | Vault origin, main thread | `apps/vault/app/*`, `apps/vault/lib/*` | Receives the request (`lib/vault-channel.ts`), redeems the token, shows review screens, runs WebAuthn (`lib/prf.ts`), generates and shows the recovery code, downloads the tool, the kit and the seed file, drives deployments and transactions through the proxy (`lib/aa-client.ts`) |
 | Signer worker | Vault origin, dedicated Web Worker, one per operation | `apps/vault/lib/signer.worker.ts` over `packages/core/src/signer.ts` | Decrypts B and C, fetches share A, verifies the manifest and digests, combines, checks the address, signs; returns only results. Closes after one reply |
-| Vault HTTP API | Vault server (Node.js) | `apps/vault/app/api/**/route.ts`, `apps/vault/server/*` | Token redemption and sessions, share storage and release, manifest signing, WebAuthn verification, relink, chain status and the restricted AA proxy (which builds the sponsored deployment), s2s lookup, brand files, tool download, health, rate limits (`server/rate-limit.ts`, `server/limits.ts`) |
+| Vault HTTP API | Vault server (Node.js) | `apps/vault/app/api/**/route.ts`, `apps/vault/server/*` | Token redemption and sessions, share storage and release, manifest signing, WebAuthn verification, relink, chain status and the restricted AA proxy (which builds the deployment and transaction operations, `server/sponsorship.ts` and `server/transactions.ts`), s2s lookup, brand files, tool download, health, rate limits (`server/rate-limit.ts`, `server/limits.ts`) |
 | KMS stub | Vault server | `apps/vault/server/kms.ts` | Seals and opens share A with a key derived from `MASTER_KEY` |
 | Store | Vault server | `apps/vault/server/store/*` | SQLite (`node:sqlite`, development and tests) or Postgres (`pg`), versioned migrations, atomic single-use operations, rate-limit counters shared by replicas |
 | Static recovery page | Any static host on an origin valid for the RP ID | `apps/vault/static-recovery`, `apps/vault/scripts/build-static-recovery.mjs` | B+C and kit+code recovery with no backend (`connect-src 'none'`) |
@@ -210,7 +210,7 @@ flowchart TB
 | 2 to 3 | Vault page to worker | PRF output and code bytes (transferred, so detached from the page), encrypted envelopes, the signed manifest, the request | Same origin. The worker returns only an address, a signature, an encrypted seed backup or, for explicit exports, the mnemonic. The page never sees share plaintext. |
 | 3 to 4 | Worker to vault server | Share A (plaintext, server to worker; and worker to server at enrollment), encB, encC, digests, chain status | TLS and HSTS, `__Host-vault_session` cookie (HttpOnly, Secure, SameSite=Strict, 15 min), `X-Vault-App-Origin` binding, `Origin` checks on writes, rate limits and a 128 KiB body cap. Share A of a `pending` set goes only to the session that created it, within per-session and per-user budgets, and every release is recorded. Share A is authenticated by the signed manifest's digest. |
 | 5 to 4 | Integrator backend to vault server | Handoff JWT (via the browser), JWKS, s2s requests | JWT signature (EdDSA, ES256, RS256) against the JWKS, `iss`, `aud`, max 120 s lifetime, single-use `jti`, signed `origin`; s2s bearer token compared in constant time. **The vault trusts the integrator backend for user identity and cannot verify its 2FA.** |
-| 4 to 6 | Vault server to chain infrastructure | Chain status calls, fee and gas queries, paymaster calls, the Safe deployment UserOperation | Three-method allowlist; the server builds the deployment itself within the sponsorship caps, validates every fee, gas and paymaster answer, and forwards only that operation with the owner's signature, once per Safe and chain; server-side sponsorship context; per-IP and per-`sub` rate limits; response size and time limits; chain id check. RPC providers, bundlers and paymasters are trusted only for liveness and the data they report. |
+| 4 to 6 | Vault server to chain infrastructure | Chain status calls, fee, gas and nonce queries, paymaster calls, the Safe deployment and transaction UserOperations | Four-method allowlist; the server builds every operation itself within the sponsorship caps, validates every fee, gas and paymaster answer, and forwards only an operation it prepared, with the owner's signature, once (a deployment once per Safe and chain); transactions are sponsored only where `AA_CHAINS[chainId].sponsorTransactions` is `true`; server-side sponsorship context; per-IP and per-`sub` rate limits; response size and time limits; chain id check. RPC providers, bundlers and paymasters are trusted only for liveness and the data they report. |
 | 7 | Offline | Kit and code typed into the tool | CSP `connect-src 'none'` and a fetch stub; no server, no passkey. Authenticity rests on AES-GCM under the code; the tool does not verify the manifest signature. |
 
 The vault page, the worker and the vault server are **one trust domain** in practice: whoever controls the JavaScript the vault origin serves controls everything a user does there. The boundaries 2 to 3 and 3 to 4 limit exposure inside that domain (no plaintext shares on the main thread; the server never sees B, C or the seed), they do not defend against a compromised vault server. See [THREAT-MODEL.md](THREAT-MODEL.md).
@@ -234,7 +234,7 @@ The vault stores nothing in `localStorage`, `sessionStorage` or IndexedDB. Its o
 
 ## Server storage
 
-Tables (migrations `001-initial` to `006-limits-and-audit` in `apps/vault/server/store/migrations/`):
+Tables (migrations `001-initial` to `007-prepared-transactions` in `apps/vault/server/store/migrations/`):
 
 | Table | Contents |
 |---|---|
@@ -247,6 +247,7 @@ Tables (migrations `001-initial` to `006-limits-and-audit` in `apps/vault/server
 | `wallet_relinks` | Append-only audit trail of every relink |
 | `share_a_releases` | Append-only audit trail of every share A release: user, set, its status, the session's SHA-256, app origin, time. No foreign key, because a relink moves sets |
 | `sponsored_deployments` | One row per Safe and chain: the server-built deployment operation and its hash, status (`prepared`, `submitting`, `sent`), the bundler's `userOpHash` once sent |
+| `prepared_transactions` | One row per chain, Safe and operation hash (migration 007): the server-built transaction operation and the call it executes, status (`prepared`, `submitting`, `sent`), whether it is sponsored, the bundler's `userOpHash` once sent. Expired `prepared` rows are deleted on later prepares; `sent` rows stay, for the receipt check |
 | `rate_limits` | One fixed-window counter per bucket (`<scope>:ip:<ip>`, `<scope>:sub:<sub>`, share A budgets), purged after expiry |
 | `schema_migrations` | Applied migration versions |
 
@@ -339,11 +340,49 @@ sequenceDiagram
 
 Without a paymaster, the server builds the same operation without paymaster fields, and the page checks the Safe's balance against the required prefund (`INSUFFICIENT_FUNDS`).
 
+### Send a transaction
+
+```mermaid
+sequenceDiagram
+  participant P as Vault page
+  participant W as Worker
+  participant S as Vault server
+  participant C as Chain RPC
+  participant B as Bundler / paymaster
+  P->>P: parseVaultCall (reject before showing anything)
+  P->>S: GET /api/aa/status
+  S-->>P: {chainId, deployed: true, bundler, transactionsSponsored, ...}
+  P->>S: POST /api/aa/rpc vault_prepareTransaction [{to, value, data?}]
+  S->>C: eth_getCode, eth_getBalance, fees, EntryPoint getNonce
+  S->>B: paymaster stub (if sponsored), gas estimate, paymaster data (if sponsored)
+  S->>S: record in prepared_transactions
+  S-->>P: unsigned UserOperation
+  P->>P: Review: origin, chain, Safe, recipient, amount, data (ERC-20 decoded), sponsorship or maximum fee
+  Note over P: User approves
+  P->>P: passkey assertion (PRF)
+  P->>W: send-transaction {chainId, signed, encB, prf, transaction, userOperation}
+  W->>W: verify manifest, call allowed, operation executes exactly this call
+  W->>S: GET /api/aa/status (deployed?)
+  W->>S: GET /api/shares/a
+  W->>W: combine, check owner, sign SafeOp
+  W-->>P: signed userOperation
+  P->>S: eth_sendUserOperation
+  S->>S: find by userOpHash, compare, owner signature, TTL, claim
+  S->>B: eth_sendUserOperation (once)
+  P->>S: eth_getUserOperationReceipt (polling, up to 180 s)
+  P-->>P: result {address, owner, chainId, userOpHash, transactionHash}
+```
+
+1. The Safe must be deployed on the request's chain (`WALLET_NOT_DEPLOYED`) and the chain must have a bundler (`CHAIN_NOT_SUPPORTED`). A call to the Safe itself with non-empty data is refused (`CALL_NOT_ALLOWED`): it could change owners, modules or the guard. A plain value transfer to itself is allowed.
+2. `vault_prepareTransaction` (`server/transactions.ts`): the server checks the code and the balance (`INSUFFICIENT_FUNDS` if it does not cover `value`, before any paymaster or bundler call), takes the nonce from the EntryPoint (`getNonce(safe, 0)`), encodes the call as the Safe 4337 module's `executeUserOpWithErrorString(to, value, data, 0)` (always a CALL; no delegatecall, no batch), computes the fees as for deployments, and sets gas from the bundler's estimate plus 20 % within the caps. Paymaster fields are added only where the chain has a `paymasterUrl` and `sponsorTransactions: true`; otherwise the Safe must also hold the prefund (`INSUFFICIENT_FUNDS`). The operation and the call are recorded in `prepared_transactions` and returned unsigned. This happens before the passkey prompt.
+3. The worker `send-transaction` refuses a call to the Safe with data, an operation that does not execute exactly the reviewed call from this Safe (`INTERNAL`), and a Safe that is not deployed, and only then reconstructs the seed (A+B) and signs the SafeOp.
+4. `eth_sendUserOperation` without `factory` is the transaction path: the server normalizes the candidate, looks it up by its `userOpHash` (any changed field finds nothing), re-checks it against the prepared operation and its call, requires the owner's signature, refuses an operation prepared more than 10 minutes earlier (`TRANSACTION_EXPIRED`), claims it (`TRANSACTION_IN_PROGRESS` for a concurrent send) and forwards it once; a resend returns the same hash, and a bundler failure releases it. Receipts are polled as for deployments. A receipt with `success: false` returns `TRANSACTION_REVERTED`, and no receipt within 180 s returns `TRANSACTION_TIMEOUT`; in both cases the popup shows the hashes.
+
 ### Recover with each pair
 
 | Path | Where | Needs | Server involvement |
 |---|---|---|---|
-| A+B | `/unlock`, every sign, deploy, export | Session + passkey | Releases A |
+| A+B | `/unlock`, every sign, deploy, transaction, export | Session + passkey | Releases A |
 | A+C ("I lost my passkey") | `/recover` | Session + recovery code | Releases A (and encC from `GET /api/shares`) |
 | B+C ("Without the server") | `/recover`, `/relink`, static page | Kit + passkey + code | None |
 | kit+code ("Without passkey") | `/recover`, `/relink`, static page, offline tool | Kit `v: 2` + code | None |

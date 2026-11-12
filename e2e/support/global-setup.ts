@@ -263,7 +263,8 @@ export default async function globalSetup() {
   // On Linux, `host-gateway` does not reach what listens only on 127.0.0.1.
   const bindHost = IMAGE_MODE && process.platform === 'linux' ? '0.0.0.0' : '127.0.0.1';
   const stack = await startAaStack([
-    { chainId: CHAIN_A, port: RPC_PORTS[CHAIN_A], withContracts: true, bindHost },
+    // Transactions are sponsored on A only: on B the Safe pays for its own calls.
+    { chainId: CHAIN_A, port: RPC_PORTS[CHAIN_A], withContracts: true, sponsorTransactions: true, bindHost },
     { chainId: CHAIN_B, port: RPC_PORTS[CHAIN_B], withContracts: true, bindHost },
     { chainId: CHAIN_NO_FACTORY, port: RPC_PORTS[CHAIN_NO_FACTORY], withContracts: false, bindHost },
   ]);

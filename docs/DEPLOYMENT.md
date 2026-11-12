@@ -163,7 +163,7 @@ Set `TRUSTED_PROXIES` to the address or subnet your proxy connects from, and mak
 | `ALLOWED_APP_ORIGINS` | No | Unset: any origin | Comma-separated app origins. An additional restriction: without it, any app origin that arrives signed in a valid token is accepted. Each entry must be a valid origin. |
 | `DATABASE_URL` | Yes in production | `sqlite:data/vault.db` outside production | `postgres://` or `postgresql://` URL (SSL via `sslmode`). `sqlite:<path>` is rejected in production unless `ALLOW_INSECURE_LOCAL=1`. The SQLite file is created with mode `0600`, in WAL mode, relative to the working directory. With `VERCEL=1`, a Postgres URL whose host is not local must set `sslmode=require`, `verify-ca` or `verify-full`. |
 | `DATABASE_POOL_SIZE` | No | `10`; `5` with `VERCEL=1` | Integer from 1 to 200. Postgres connections per replica (per function instance on Vercel, where idle connections are also closed after 5 seconds). |
-| `AA_CHAINS` | No | `{}` | JSON object keyed by `chainId`. Bundler, paymaster and RPC per chain. Without an entry with `bundlerUrl`, the Safe cannot be deployed on that chain. See [Chain configuration](#chain-configuration). |
+| `AA_CHAINS` | No | `{}` | JSON object keyed by `chainId`. Bundler, paymaster and RPC per chain. Without an entry with `bundlerUrl`, the Safe cannot be deployed on that chain, nor send transactions there. See [Chain configuration](#chain-configuration). |
 | `RPC_ALLOWED_HOSTS` | No | Empty: none | Comma-separated hostnames allowed for an RPC URL that arrives in a handoff token (or in the `rpcUrl` query of the service route) when `AA_CHAINS` has no `rpcUrl` for that chain. Such URLs must be HTTPS without credentials; HTTP only on a local host in insecure local mode. |
 | `VAULT_BRAND_DIR` | No | Unset: neutral brand | Directory with `brand.json` and its files, mounted read-only. Read once at startup; an invalid brand stops the vault in production. See [BRANDING.md](BRANDING.md). |
 | `VAULT_BRAND_NAME` | No | `name` in `brand.json`, else `Vault` | Name shown in the UI and stored with the passkey. At most 64 characters, no control characters. Overrides `name` in `brand.json`. |
@@ -175,7 +175,7 @@ Set `TRUSTED_PROXIES` to the address or subnet your proxy connects from, and mak
 | `SHARE_A_MAX_PER_SESSION` | No | `5` | Positive integer. Share A releases per session in each window. |
 | `SHARE_A_MAX_PER_USER` | No | `30` | Positive integer. Share A releases per user (`sub`) in each window, across sessions. |
 | `RECOVERY_CHALLENGE_MAX_LIVE` | No | `1000` | Positive integer. Unexpired kit-free recovery challenges at once, across all clients. At the cap, `POST /api/recovery/passkey/challenge` answers `429`. |
-| `AA_MAX_VERIFICATION_GAS_LIMIT` | No | `3000000` | Positive decimal integer. Cap on the sponsored deployment's `verificationGasLimit`. |
+| `AA_MAX_VERIFICATION_GAS_LIMIT` | No | `3000000` | Positive decimal integer. Cap on the `verificationGasLimit` of every operation the server builds (deployments and transactions). |
 | `AA_MAX_CALL_GAS_LIMIT` | No | `500000` | Same, for `callGasLimit`. |
 | `AA_MAX_PRE_VERIFICATION_GAS` | No | `500000` | Same, for `preVerificationGas`. Too low for some L2s: see [Sponsorship limits](#sponsorship-limits). |
 | `AA_MAX_PAYMASTER_VERIFICATION_GAS_LIMIT` | No | `500000` | Same, for `paymasterVerificationGasLimit`. |
@@ -254,6 +254,7 @@ Over a budget the answer is `429 {"error":"RATE_LIMITED"}` with `Retry-After` an
     "paymasterUrl": "https://paymaster.example.com/rpc",
     "paymasterHeaders": { "Authorization": "Bearer ..." },
     "paymasterContext": { "sponsorshipPolicyId": "..." },
+    "sponsorTransactions": false,
     "limits": { "maxPreVerificationGas": "1000000", "maxFeePerGas": "50000000000" }
   }
 }
@@ -265,18 +266,19 @@ Over a budget the answer is `429 {"error":"RATE_LIMITED"}` with `Retry-After` an
 | `name` | None | Shown as `chainName`. Without it, a built-in name for a few well-known chains (1, 10, 137, 8453, 42161, 80002, 84532, 11155111), else "Unnamed network". |
 | `nativeCurrency` | `^[A-Za-z0-9._-]{1,11}$` | Symbol shown for amounts on that chain (`ChainStatus.nativeCurrency`, the deploy flow and the sign review). Without it, the built-in symbol of a well-known chain (`POL` on 137 and 80002, `ETH` on the others), else `ETH`. |
 | `rpcUrl` | http(s) URL; HTTPS unless local in insecure local mode | Takes precedence over the RPC URL in the handoff token. Use it whenever the URL carries an API key, because the token passes through the browser. |
-| `bundlerUrl` | Same | Required to deploy the Safe on that chain, and required if `paymasterUrl` is set. Signing works without it once the Safe is deployed. |
+| `bundlerUrl` | Same | Required to deploy the Safe and to send transactions on that chain, and required if `paymasterUrl` is set. Signing works without it once the Safe is deployed. |
 | `bundlerHeaders` | Object of strings | Added to every bundler request. |
 | `paymasterUrl` | Same | ERC-7677 paymaster. Without it, the Safe must hold funds to pay for its own deployment. |
 | `paymasterHeaders` | Object of strings | Added to every paymaster request. |
 | `paymasterContext` | Object | Sent as the paymaster context. The server sets it; the browser cannot choose the sponsorship policy. |
+| `sponsorTransactions` | `true` or `false`; `true` requires `paymasterUrl`. Default `false` | `true`: the paymaster also sponsors [transactions](#transaction-sponsorship) from the deployed Safe (`sendTransaction`), not only its deployment. Without it, the Safe pays for its own transactions. |
 | `limits` | Object with the keys `maxVerificationGasLimit`, `maxCallGasLimit`, `maxPreVerificationGas`, `maxPaymasterVerificationGasLimit`, `maxPaymasterPostOpGasLimit`, `maxFeePerGas`, `feeMultiplierPercent`, `priorityFeeMultiplierPercent`; each a positive decimal integer string or a safe integer (the two multipliers from 100 to 1000). Unknown keys are errors. | Per-chain [sponsorship limits](#sponsorship-limits), over the `AA_MAX_*` variables. |
 
-URLs and headers live only on the server. The browser talks to the vault's [`/api/aa/rpc`](HTTP-API.md#post-apiaarpc), where the server builds the deployment of the session user's own Safe and forwards only that operation, signed by its owner. Real bundler and paymaster providers and public networks are untested ([TEST-STATUS.md](TEST-STATUS.md)); values for Pimlico on three public testnets are in [Public testnets](#public-testnets). Integrator details: [INTEGRATION.md](INTEGRATION.md).
+URLs and headers live only on the server. The browser talks to the vault's [`/api/aa/rpc`](HTTP-API.md#post-apiaarpc), where the server builds the deployment of the session user's own Safe, or one call from it once deployed, and forwards only that operation, signed by its owner. Real bundler and paymaster providers and public networks are untested ([TEST-STATUS.md](TEST-STATUS.md)); values for Pimlico on three public testnets are in [Public testnets](#public-testnets). Integrator details: [INTEGRATION.md](INTEGRATION.md).
 
 ### Sponsorship limits
 
-The server builds every deployment within caps (`server/limits.ts`), whether or not a paymaster sponsors it. For each field the value is taken from `AA_CHAINS["<chainId>"].limits`, then its environment variable, then the default:
+The server builds every deployment and every transaction within caps (`server/limits.ts`), whether or not a paymaster sponsors it. For each field the value is taken from `AA_CHAINS["<chainId>"].limits`, then its environment variable, then the default:
 
 | Limit | Variable | Default |
 |---|---|---|
@@ -296,7 +298,13 @@ Fees are decided by the server (`deploymentFees` in `server/sponsorship.ts`) fro
 
 A bundler without that method (method not found, an error, a malformed answer) leaves the node's values alone. A node gas price, node tip or bundler quote already above the cap is refused (`FEES_TOO_HIGH`). The floor exists because Pimlico (alto) refuses `eth_sendUserOperation` below its own recent quotes: on Sepolia the node's tip is about 50 wei while Pimlico asks 0.001 to 0.7 gwei, and on Polygon Amoy and Base Sepolia the node's tip equals Pimlico's floor exactly, so the tip margin covers a floor that rises between prepare and send. Each gas limit from the bundler's estimate gets 20 % more, clamped to its cap; an estimate already above its cap, or a paymaster gas limit above its cap, is refused (`GAS_LIMIT_EXCEEDED`).
 
-The defaults suit L1-like chains and have not been tested against real providers. **On L2s, override them per chain:** on OP-stack chains (Optimism, Base) and Arbitrum, `preVerificationGas` includes the L1 data cost and can exceed 500,000 (millions on Arbitrum), so raise `maxPreVerificationGas`; and 500 gwei is a loose cap where fees are a fraction of a gwei, so lower `maxFeePerGas`. A sponsored deployment can cost up to the gas caps times the fee cap: size them against your paymaster budget.
+The defaults suit L1-like chains and have not been tested against real providers. **On L2s, override them per chain:** on OP-stack chains (Optimism, Base) and Arbitrum, `preVerificationGas` includes the L1 data cost and can exceed 500,000 (millions on Arbitrum), so raise `maxPreVerificationGas`; and 500 gwei is a loose cap where fees are a fraction of a gwei, so lower `maxFeePerGas`. A sponsored deployment or transaction can cost up to the gas caps times the fee cap: size them against your paymaster budget.
+
+### Transaction sponsorship
+
+Transactions use the same fees and caps as deployments. Where `sponsorTransactions` is `true`, the paymaster pays their network fee; elsewhere the Safe pays it in the native currency, and `vault_prepareTransaction` answers `INSUFFICIENT_FUNDS` unless the Safe's balance covers the value plus the maximum fee (the gas limits times `maxFeePerGas`). The value is always paid by the Safe.
+
+**Sponsoring transactions lets every user spend your paymaster budget on calls of their choosing**, not only on one deployment per Safe and chain. The vault bounds each operation (gas and fee caps), each user and IP (the [`transaction` rate-limit scope](#rate-limits)), and sends only operations it prepared, once, within 10 minutes. It has no total budget: set per-user and global spend limits in the paymaster's sponsorship policy (in the Pimlico dashboard, on the policy referenced by `paymasterContext`), and treat them as the outer bound. See [THREAT-MODEL.md](THREAT-MODEL.md).
 
 ## Rate limits
 
@@ -312,11 +320,12 @@ The vault limits its routes itself (`server/rate-limit.ts`). Each scope has a pe
 | `relink-nonce` | `POST /api/relink/nonce` | 10 | 5 |
 | `relink` | `POST /api/relink` | 10 | 5 |
 | `aa` | `GET /api/aa/status`, `POST /api/aa/rpc` | 240 | 120 |
+| `transaction` | `vault_prepareTransaction` on `POST /api/aa/rpc`, on top of `aa` | 30 | 10 |
 | `s2s` | `GET /api/s2s/accounts/{sub}` | 600 | 60 |
 
 Override any field with `RATE_LIMITS`, for example `RATE_LIMITS='{"handoff":{"ip":60},"s2s":{"windowSeconds":10}}'`. Share A releases also have their own budgets (`SHARE_A_*`), and live recovery challenges a global cap (`RECOVERY_CHALLENGE_MAX_LIVE`).
 
-These defaults are a starting point, not tuned for any traffic, and have not been tested under real load or behind a real proxy. The per-IP limits only work if the vault sees real client addresses: see [Client addresses behind a proxy](#client-addresses-behind-a-proxy). Behind a proxy that many users share (a corporate NAT, for example), raise the per-IP limits. The `aa` limit must allow the deploy flow's receipt polling (once a second for the first 30 polls, then every 3 seconds, for up to 180 seconds: at most 60 requests a minute per deployment). Limiting at the proxy as well remains useful, especially for request floods that never reach a route.
+These defaults are a starting point, not tuned for any traffic, and have not been tested under real load or behind a real proxy. The per-IP limits only work if the vault sees real client addresses: see [Client addresses behind a proxy](#client-addresses-behind-a-proxy). Behind a proxy that many users share (a corporate NAT, for example), raise the per-IP limits. The `aa` limit must allow the receipt polling of the deploy and transaction flows (once a second for the first 30 polls, then every 3 seconds, for up to 180 seconds: at most 60 requests a minute per operation). Each `vault_prepareTransaction` may be sponsored and costs paymaster and bundler calls, so the `transaction` scope is much lower; size it against your paymaster budget where `sponsorTransactions` is on. Limiting at the proxy as well remains useful, especially for request floods that never reach a route.
 
 ## Branding
 
@@ -405,11 +414,12 @@ Observability is limited to stdout logs and this endpoint.
 
 Migrations (`apps/vault/server/store/migrate.ts` and `migrations/`) run automatically at startup, before requests are accepted:
 
-- They are versioned in code (`001-initial` to `006-limits-and-audit` in this release) and recorded in a `schema_migrations` table (`version`, `name`, `applied_at`).
+- They are versioned in code (`001-initial` to `007-prepared-transactions` in this release) and recorded in a `schema_migrations` table (`version`, `name`, `applied_at`).
 - All pending migrations run in **one transaction**. On Postgres it takes a transaction-level advisory lock, so replicas that start at the same time are serialized, and it also works behind a pooler. On SQLite, `BEGIN IMMEDIATE` does the same.
 - **There are no down migrations.** A vault started against a schema newer than it knows refuses to touch it ("The database schema is newer than this vault") and, in production, exits. To roll back, restore the backup taken before upgrading.
 - Some migrations are destructive by design: `002-remove-vault-second-factor` deletes all sessions and drops the old TOTP columns. Sessions are short-lived, so users only need to reopen the popup.
 - `006-limits-and-audit` adds `rate_limits`, `share_a_releases`, `sponsored_deployments` and `share_sets.created_session_hash`. Sets that were `pending` before it have no creating session recorded, so share A of those sets is never released: the user restarts that enrollment or rotation. Active sets are unaffected.
+- `007-prepared-transactions` adds `prepared_transactions`, the transactions the server built for a deployed Safe. It changes no existing table.
 
 Restoring from a backup is untested.
 
@@ -425,11 +435,11 @@ Restoring from a backup is untested.
 
 What to back up: **the database** (Postgres dump or volume snapshot) and **the two keys** (`MASTER_KEY`, `MANIFEST_SIGNING_KEY`). Store them **separately**: together, a leak gives share A of every user. The database alone is useless without `MASTER_KEY`, and share A alone reconstructs nothing.
 
-The `wallet_relinks` and `share_a_releases` tables are audit trails that are never pruned; keep them in your backups. `sponsored_deployments` keeps one row per Safe and chain ever prepared and is not pruned either.
+The `wallet_relinks` and `share_a_releases` tables are audit trails that are never pruned; keep them in your backups. `sponsored_deployments` keeps one row per Safe and chain ever prepared and is not pruned either. In `prepared_transactions`, rows never sent are deleted once they expire; sent ones are kept.
 
 ## Multiple replicas
 
-Replicas can share one Postgres with no session affinity: sessions, single-use `jti` values, WebAuthn challenges, relink nonces, rate-limit counters, share A budgets and sponsored deployments are all in the database, and every operation that relies on atomicity stays atomic across replicas. Limits are therefore per deployment, not per replica. Rate-limit windows follow each replica's clock, so keep the clocks synchronized. All replicas need the same environment. `DATABASE_POOL_SIZE` times the number of replicas must stay below Postgres's `max_connections` and your pooler's limit.
+Replicas can share one Postgres with no session affinity: sessions, single-use `jti` values, WebAuthn challenges, relink nonces, rate-limit counters, share A budgets, sponsored deployments and prepared transactions are all in the database, and every operation that relies on atomicity stays atomic across replicas. Limits are therefore per deployment, not per replica. Rate-limit windows follow each replica's clock, so keep the clocks synchronized. All replicas need the same environment. `DATABASE_POOL_SIZE` times the number of replicas must stay below Postgres's `max_connections` and your pooler's limit.
 
 Known limitation: a browser holds one vault session cookie, and redeeming a new token deletes that browser's previous session. Two concurrent operations from the same browser (for example on two chains) therefore interfere.
 
@@ -562,12 +572,12 @@ Add them with `vercel env add <NAME> production --sensitive` or the dashboard's 
 - [ ] The vault's `RP_ID` is exactly the host of its `ORIGIN`.
 - [ ] The vault's `ALLOWED_APP_ORIGINS` contains the demo's `ORIGIN`.
 - [ ] `VAULT_SERVICE_TOKEN` is identical in both projects.
-- [ ] Every `DEMO_CHAINS[].chainId` that should deploy a Safe has an `AA_CHAINS` entry with `bundlerUrl` (and `paymasterUrl` to sponsor it).
+- [ ] Every `DEMO_CHAINS[].chainId` that should deploy a Safe has an `AA_CHAINS` entry with `bundlerUrl` (and `paymasterUrl` to sponsor it, plus `"sponsorTransactions":true` to sponsor its transactions).
 - [ ] Every `DEMO_CHAINS[].rpcUrl` host is in `RPC_ALLOWED_HOSTS`, unless that chain has an `rpcUrl` in `AA_CHAINS`.
 
 ### Public testnets
 
-Values for Ethereum Sepolia, Polygon Amoy and Base Sepolia with Pimlico as bundler and paymaster (EntryPoint v0.7), checked on 2026-11-11: the Safe 4337 contracts the vault expects are deployed on all three, and the factory returns the predicted address. Nothing has been sent through the vault to any of them yet ([TEST-STATUS.md](TEST-STATUS.md)).
+Values for Ethereum Sepolia, Polygon Amoy and Base Sepolia with Pimlico as bundler and paymaster (EntryPoint v0.7), checked on 2026-11-11: the Safe 4337 contracts the vault expects are deployed on all three, and the factory returns the predicted address. Nothing has been sent through the vault to any of them yet, neither a deployment nor a transaction ([TEST-STATUS.md](TEST-STATUS.md)).
 
 | Chain | `chainId` | Native currency | Keyless RPC | Explorer |
 |---|---|---|---|---|
@@ -578,7 +588,7 @@ Values for Ethereum Sepolia, Polygon Amoy and Base Sepolia with Pimlico as bundl
 `AA_CHAINS` for the vault (replace `<PIMLICO_API_KEY>`; in the Vercel dashboard paste only the JSON, without the quotes):
 
 ```bash
-AA_CHAINS='{"11155111":{"name":"Ethereum Sepolia","rpcUrl":"https://ethereum-sepolia-rpc.publicnode.com","bundlerUrl":"https://api.pimlico.io/v2/11155111/rpc?apikey=<PIMLICO_API_KEY>","paymasterUrl":"https://api.pimlico.io/v2/11155111/rpc?apikey=<PIMLICO_API_KEY>","limits":{"maxFeePerGas":"100000000000"}},"80002":{"name":"Polygon Amoy","nativeCurrency":"POL","rpcUrl":"https://polygon-amoy-bor-rpc.publicnode.com","bundlerUrl":"https://api.pimlico.io/v2/80002/rpc?apikey=<PIMLICO_API_KEY>","paymasterUrl":"https://api.pimlico.io/v2/80002/rpc?apikey=<PIMLICO_API_KEY>","limits":{"maxFeePerGas":"500000000000"}},"84532":{"name":"Base Sepolia","rpcUrl":"https://base-sepolia-rpc.publicnode.com","bundlerUrl":"https://api.pimlico.io/v2/84532/rpc?apikey=<PIMLICO_API_KEY>","paymasterUrl":"https://api.pimlico.io/v2/84532/rpc?apikey=<PIMLICO_API_KEY>","limits":{"maxPreVerificationGas":"1000000","maxFeePerGas":"2000000000"}}}'
+AA_CHAINS='{"11155111":{"name":"Ethereum Sepolia","rpcUrl":"https://ethereum-sepolia-rpc.publicnode.com","bundlerUrl":"https://api.pimlico.io/v2/11155111/rpc?apikey=<PIMLICO_API_KEY>","paymasterUrl":"https://api.pimlico.io/v2/11155111/rpc?apikey=<PIMLICO_API_KEY>","sponsorTransactions":true,"limits":{"maxFeePerGas":"100000000000"}},"80002":{"name":"Polygon Amoy","nativeCurrency":"POL","rpcUrl":"https://polygon-amoy-bor-rpc.publicnode.com","bundlerUrl":"https://api.pimlico.io/v2/80002/rpc?apikey=<PIMLICO_API_KEY>","paymasterUrl":"https://api.pimlico.io/v2/80002/rpc?apikey=<PIMLICO_API_KEY>","sponsorTransactions":true,"limits":{"maxFeePerGas":"500000000000"}},"84532":{"name":"Base Sepolia","rpcUrl":"https://base-sepolia-rpc.publicnode.com","bundlerUrl":"https://api.pimlico.io/v2/84532/rpc?apikey=<PIMLICO_API_KEY>","paymasterUrl":"https://api.pimlico.io/v2/84532/rpc?apikey=<PIMLICO_API_KEY>","sponsorTransactions":true,"limits":{"maxPreVerificationGas":"1000000","maxFeePerGas":"2000000000"}}}'
 ```
 
 `DEMO_CHAINS` for the demo:
@@ -599,7 +609,8 @@ Pimlico:
 
 - The same URL, `https://api.pimlico.io/v2/<chainId>/rpc?apikey=<KEY>`, serves the bundler and the paymaster, with no headers. The key in the query string is never logged by the vault, and URLs are stripped from upstream error messages; `AA_CHAINS` must still be Sensitive.
 - The paymaster sponsors from the Pimlico account's balance, and new accounts start with no credit: fund the account, or create a sponsorship policy in the Pimlico dashboard and add `"paymasterContext":{"sponsorshipPolicyId":"sp_..."}` to each chain.
-- Pimlico's `paymasterData` carries a `validUntil`. If the user takes too long between `vault_prepareDeployment` and signing, the send fails (an AA3x bundler error, `DEPLOY_FAILED` to the app); retrying the deployment prepares a new operation.
+- Pimlico's `paymasterData` carries a `validUntil`. If the user takes too long between `vault_prepareDeployment` (or `vault_prepareTransaction`) and signing, the send fails (an AA3x bundler error, `SPONSORSHIP_REJECTED` to the app); retrying prepares a new operation. A transaction prepared more than 10 minutes earlier is refused by the vault itself (`TRANSACTION_EXPIRED`).
+- With `"sponsorTransactions":true`, every user can have the paymaster pay for any call from their Safe. Use a sponsorship policy with per-user and global spend limits sized to the budget you accept to lose, and fund the account accordingly; remove `sponsorTransactions` from a chain to have its Safes pay for their own transactions. A policy that is inactive or out of budget reaches the app as `SPONSORSHIP_REJECTED`.
 
 The `rpcUrl` of `DEMO_CHAINS` is signed into the handoff token, which the browser can read, and the demo also uses it server-side for ERC-1271 checks: it must never carry an API key. A keyed RPC belongs only in `AA_CHAINS[chainId].rpcUrl`, which never leaves the vault server. Keyless public RPCs are rate-limited on a fair-use basis: fine for a demo, not for real traffic.
 
@@ -607,14 +618,14 @@ The `rpcUrl` of `DEMO_CHAINS` is signed into the handoff token, which the browse
 
 After the first deployment of both projects:
 
-- `curl -s V/api/health` returns `{"status":"ok"}`, and the vault's Neon database has `schema_migrations` rows 1 to 6.
+- `curl -s V/api/health` returns `{"status":"ok"}`, and the vault's Neon database has `schema_migrations` rows 1 to 7.
 - `curl -sI V/` shows `Content-Security-Policy` with a nonce, `Strict-Transport-Security` and `X-Frame-Options: DENY`; a worker chunk under `V/_next/static/` has the worker CSP.
 - `curl -sI V/recovery-tool` returns `200` with `Content-Disposition: attachment; filename="wl-embedded-wallet-recovery.html"`, not `404` "Tool not available in this deployment.", and the downloaded file matches [REPRODUCIBLE-BUILDS.md](REPRODUCIBLE-BUILDS.md). Together with the next check, this confirms the assumption that `process.cwd()` inside a function is the app directory.
 - Pages render the WL brand, and the `/brand/<hash>.css` they link returns `200`.
 - `curl -s D/.well-known/jwks.json` lists one OKP (Ed25519) key with no `d`.
 - The runtime logs of both projects show no `Invalid configuration`, no `Cannot prepare the DATABASE_URL database` and no `pg` `SECURITY WARNING`. A startup issue naming `CLIENT_IP_SOURCE` and "not a Vercel runtime" means `VERCEL_REGION` is missing: check that system variables are exposed.
 - Eleven `POST V/api/recovery/passkey/challenge` with `Origin: V` from one machine: the eleventh is `429`, and still `429` with forged `X-Forwarded-For` or `X-Real-IP` headers. Likewise the eleventh `POST D/api/auth/register` with `Origin: D` is `429`.
-- In Chrome, Safari and Firefox on the real domains: register on the demo, set up TOTP, open the wallet, create the passkey (the prompt names the vault's host), download the tool and the kit, deploy the Safe on each testnet (sponsored), sign a message and have the demo verify it, log out and in, unlock with the passkey, and follow the explorer links.
+- In Chrome, Safari and Firefox on the real domains: register on the demo, set up TOTP, open the wallet, create the passkey (the prompt names the vault's host), download the tool and the kit, deploy the Safe on each testnet (sponsored), sign a message and have the demo verify it, send a 0-value transaction from the Transaction tab to another address (sponsored: the Safe's balance does not change) and follow its explorer link, log out and in, unlock with the passkey, and follow the explorer links.
 
 ### Vercel Firewall
 
@@ -637,8 +648,8 @@ Then open `http://app.localhost:3200`.
 |---|---|---|
 | Demo app | `http://app.localhost:3200` | `examples/demo/package.json` (`next dev -p 3200`) |
 | Vault | `http://vault.localhost:3201` | `apps/vault/package.json` (`next dev -p 3201`) |
-| Local chain 31001 | RPC `http://127.0.0.1:21545`, bundler `:22545`, paymaster `:23545` | `apps/vault/tests/aa-stack/run.mjs` |
-| Local chain 31002 | RPC `http://127.0.0.1:21546`, bundler `:22546`, paymaster `:23546` | Same |
+| Local chain 31001 | RPC `http://127.0.0.1:21545`, bundler `:22545`, paymaster `:23545`; also sponsors transactions | `apps/vault/tests/aa-stack/run.mjs` |
+| Local chain 31002 | RPC `http://127.0.0.1:21546`, bundler `:22546`, paymaster `:23546`; the Safe pays for its transactions | Same |
 | Local chain 31003 | RPC `http://127.0.0.1:21547`, no contracts, no bundler or paymaster (the vault must reject it as `CHAIN_NOT_SUPPORTED`) | Same |
 
 The AA stack runs `anvil` per chain, with the bundler on the RPC port + 1000 and the paymaster on the RPC port + 2000 (`apps/vault/tests/aa-stack/stack.mjs`). It prints matching `AA_CHAINS`, `RPC_ALLOWED_HOSTS` and `DEMO_CHAINS` values.
@@ -655,7 +666,7 @@ Release 0.1.0 is a reference implementation for review, not a production service
 
 - [ ] **Real KMS or HSM.** `MASTER_KEY` sits in the process environment and `server/kms.ts` only simulates a KMS. Share A also travels to the server in plaintext (over TLS) at enrollment; it should be encrypted client-side to the KMS.
 - [ ] **Rate limits reviewed.** Set [`TRUSTED_PROXIES`](#client-addresses-behind-a-proxy) to your proxy (or `CLIENT_IP_SOURCE=vercel` on Vercel) and check, from the logs or a test request, that clients are not all counted as the proxy. Tune [`RATE_LIMITS`](#rate-limits) for your traffic; the defaults are untested under load. Keep limiting floods at the proxy too.
-- [ ] **Sponsorship limits** set per chain in `AA_CHAINS["<chainId>"].limits` for every L2, and sized against your paymaster budget ([Sponsorship limits](#sponsorship-limits)).
+- [ ] **Sponsorship limits** set per chain in `AA_CHAINS["<chainId>"].limits` for every L2, and sized against your paymaster budget ([Sponsorship limits](#sponsorship-limits)). Where `sponsorTransactions` is on, spend limits set in the paymaster's policy as well ([Transaction sponsorship](#transaction-sponsorship)).
 - [ ] **Image command unchanged**, or still loading the `peer-address.cjs` preload (on Vercel, `CLIENT_IP_SOURCE=vercel` instead).
 - [ ] **TLS hardening** at the proxy. The vault sends `Strict-Transport-Security: max-age=31536000` with an `https` `ORIGIN`; add `includeSubDomains` or `preload` at the proxy if you want them.
 - [ ] **Final domain and `RP_ID`** chosen before the first user, and the [static recovery page](#static-recovery-page) deployed on a subdomain from day one.

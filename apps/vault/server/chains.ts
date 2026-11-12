@@ -42,8 +42,18 @@ export interface ChainConfig {
   paymasterUrl?: string;
   paymasterHeaders?: Record<string, string>;
   paymasterContext?: Record<string, unknown>;
+  /**
+   * Opt-in: the paymaster also sponsors transactions from deployed Safes (`vault_prepareTransaction`), not only
+   * deployments. Arbitrary calls can drain the paymaster: see docs/THREAT-MODEL.md. Default `false`.
+   */
+  sponsorTransactions?: boolean;
   /** Per-chain sponsorship caps, read by `sponsorshipLimits` in `server/limits.ts`. */
   limits?: Record<string, unknown>;
+}
+
+/** Transactions are sponsored only with a paymaster and the explicit `sponsorTransactions: true`. */
+export function transactionsSponsored(config: ChainConfig): boolean {
+  return Boolean(config.paymasterUrl) && config.sponsorTransactions === true;
 }
 
 export interface SessionChain {
@@ -180,6 +190,7 @@ export async function chainStatus(chain: SessionChain, owner: string, account: S
     nativeCurrency: config.nativeCurrency ?? KNOWN_CHAINS[chain.chainId]?.nativeCurrency ?? DEFAULT_NATIVE_CURRENCY,
     rpcHost: new URL(url).host,
     sponsored: Boolean(config.paymasterUrl),
+    transactionsSponsored: transactionsSponsored(config),
     bundler: Boolean(config.bundlerUrl),
   };
   if (hasCode(await rpcResult(url, 'eth_getCode', [account.address, 'latest']))) {

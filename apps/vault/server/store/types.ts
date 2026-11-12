@@ -89,6 +89,24 @@ export interface SponsoredDeploymentRecord {
   updatedAt: number;
 }
 
+export type PreparedTransactionStatus = 'prepared' | 'submitting' | 'sent';
+
+/** One UserOperation the server built for a deployed Safe, keyed by chain, Safe and its hash. `safe` and `operationHash` always lowercase. */
+export interface PreparedTransactionRecord {
+  chainId: number;
+  safe: string;
+  userId: string;
+  /** `userOperationHash` of the prepared operation (the signature is not part of it). */
+  operationHash: string;
+  status: PreparedTransactionStatus;
+  /** Opaque JSON text: the store does not read it. */
+  operation: string;
+  sponsored: boolean;
+  userOpHash: string | null;
+  preparedAt: number;
+  updatedAt: number;
+}
+
 export type RelinkResult = 'LINKED' | 'NONCE_INVALID' | 'STALE' | 'HAS_WALLET';
 
 // Short: each operation brings its own app token.
@@ -182,4 +200,28 @@ export interface VaultStore {
   completeSponsoredDeployment(input: { chainId: number; safe: string; operationHash: string; userOpHash: string; now: number }): Promise<boolean>;
   /** `submitting` with that hash back to `prepared`, after a submission that did not go through. */
   releaseSponsoredDeployment(input: { chainId: number; safe: string; operationHash: string; now: number }): Promise<boolean>;
+
+  /**
+   * Inserts the operation as `prepared`. Returns `false` (and changes nothing) if a row with that chain, Safe and hash
+   * already exists. In the same call, deletes every `prepared` row (any Safe) with `updated_at <= expireBefore`: they can no longer be sent.
+   */
+  createPreparedTransaction(input: {
+    chainId: number;
+    safe: string;
+    userId: string;
+    operationHash: string;
+    operation: string;
+    sponsored: boolean;
+    now: number;
+    expireBefore: number;
+  }): Promise<boolean>;
+  getPreparedTransaction(chainId: number, safe: string, operationHash: string): Promise<PreparedTransactionRecord | null>;
+  /** `prepared` (or `submitting` with `updated_at <= now - staleSubmittingMs`) to `submitting`. Of several concurrent callers only one wins. */
+  claimPreparedTransaction(input: { chainId: number; safe: string; operationHash: string; now: number; staleSubmittingMs: number }): Promise<boolean>;
+  /** `submitting` to `sent`, with the bundler's hash. */
+  completePreparedTransaction(input: { chainId: number; safe: string; operationHash: string; userOpHash: string; now: number }): Promise<boolean>;
+  /** `submitting` back to `prepared`, after a submission that did not go through. */
+  releasePreparedTransaction(input: { chainId: number; safe: string; operationHash: string; now: number }): Promise<boolean>;
+  /** `true` if this Safe has a `sent` transaction on that chain with that bundler hash (case-insensitive). For `eth_getUserOperationReceipt`. */
+  isSentTransaction(chainId: number, safe: string, userOpHash: string): Promise<boolean>;
 }

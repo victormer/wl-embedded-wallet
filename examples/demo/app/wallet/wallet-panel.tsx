@@ -2,7 +2,7 @@
 
 import { createVaultClient, VaultError, type VaultChain } from '@wl-embedded-wallet/sdk/client';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { deploymentNotice, messageFor } from '@/lib/messages';
 import { SignForms } from './sign-forms';
 import { ChainTile, explorerAddressUrl, explorerTxUrl, type ChainOption } from '../_components/chain';
@@ -17,7 +17,7 @@ type WalletState =
   | { status: 'loading' }
   | { status: 'error' }
   | { status: 'none' }
-  | { status: 'ready'; address: `0x${string}`; owner: `0x${string}`; deployed: boolean | null; deployable: boolean; sponsored: boolean; chainError: string | null };
+  | { status: 'ready'; address: `0x${string}`; owner: `0x${string}`; deployed: boolean | null; deployable: boolean; sponsored: boolean; transactionsSponsored: boolean; chainError: string | null };
 type ActionNotice = { kind: 'ok' | 'error'; text: string; code?: string; link?: { href: string; label: string } };
 
 // Only the chain is sent: the demo server resolves the RPC, never the browser.
@@ -47,6 +47,15 @@ export function WalletPanel({ email, vaultOrigin, chains }: { email: string; vau
   const selected = chains.find((option) => option.chainId === chainId) ?? null;
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<ActionNotice | null>(null);
+  const deployButton = useRef<HTMLButtonElement>(null);
+
+  const goToDeploy = useCallback(() => {
+    const button = deployButton.current;
+    if (!button) return;
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    button.scrollIntoView({ block: 'center', behavior: reduced ? 'auto' : 'smooth' });
+    button.focus({ preventScroll: true });
+  }, []);
 
   const loadWallet = useCallback(async () => {
     try {
@@ -63,6 +72,7 @@ export function WalletPanel({ email, vaultOrigin, chains }: { email: string; vau
         deployed?: boolean | null;
         deployable?: boolean;
         sponsored?: boolean;
+        transactionsSponsored?: boolean;
         chainError?: string;
       };
       setWallet(
@@ -74,6 +84,7 @@ export function WalletPanel({ email, vaultOrigin, chains }: { email: string; vau
               deployed: body.deployed ?? null,
               deployable: body.deployable ?? false,
               sponsored: body.sponsored ?? false,
+              transactionsSponsored: body.transactionsSponsored ?? false,
               chainError: body.chainError ?? null,
             }
           : { status: 'none' },
@@ -285,6 +296,7 @@ export function WalletPanel({ email, vaultOrigin, chains }: { email: string; vau
                     {wallet.deployed === false && chain && (
                       <div className="deploy-row">
                         <button
+                          ref={deployButton}
                           type="button"
                           className="btn"
                           data-testid="deploy-button"
@@ -350,13 +362,20 @@ export function WalletPanel({ email, vaultOrigin, chains }: { email: string; vau
               </div>
             </section>
 
-            {wallet.status === 'ready' && chain && wallet.deployed === true && (
-              <SignForms key={chain.chainId} client={client} address={wallet.address} chain={chain} chainName={selected?.name ?? null} busy={busy} setBusy={setBusy} />
-            )}
-            {wallet.status === 'ready' && wallet.deployed !== true && (
-              <Notice kind="info" data-testid="sign-blocked">
-                Deploy your wallet to sign on this chain.
-              </Notice>
+            {wallet.status === 'ready' && chain && (
+              <SignForms
+                key={chain.chainId}
+                client={client}
+                address={wallet.address}
+                chain={chain}
+                chainOption={selected}
+                deployed={wallet.deployed}
+                deployable={wallet.deployable}
+                transactionsSponsored={wallet.transactionsSponsored}
+                busy={busy}
+                setBusy={setBusy}
+                onGoToDeploy={goToDeploy}
+              />
             )}
           </div>
 
@@ -403,7 +422,7 @@ export function WalletPanel({ email, vaultOrigin, chains }: { email: string; vau
                 </h2>
               </div>
               <div className="panel-body">
-                <p className="muted">This app only receives addresses and signatures. Keys live in the vault window, on its own origin.</p>
+                <p className="muted">This app only receives addresses, signatures and transaction hashes. Keys live in the vault window, on its own origin.</p>
                 <ul className="facts">
                   {PROTECTS.map((fact) => (
                     <li key={fact}>{fact}</li>

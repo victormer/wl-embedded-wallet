@@ -172,6 +172,54 @@ export function isDeploymentOperation(operation: Record<string, unknown> | null 
   );
 }
 
+/**
+ * A call from the Safe to itself with data could change its owners, modules or guard and break the Shamir model:
+ * the vault never builds or signs one. A plain transfer of value to itself is harmless and allowed.
+ */
+export function isAllowedTransactionCall(safe: `0x${string}`, call: VaultCall): boolean {
+  return !(sameAddress(call.to, safe) && Boolean(call.data) && call.data !== '0x');
+}
+
+/** Unsigned operation for one call from a deployed Safe, with a dummy signature for estimation and gas still at 0. */
+export function buildTransactionOperation(
+  safe: `0x${string}`,
+  call: VaultCall,
+  nonce: string,
+  fees: { maxFeePerGas: string; maxPriorityFeePerGas: string },
+  params: SafeParams = DEFAULT_SAFE_PARAMS,
+): UserOperationJson {
+  return {
+    sender: safe,
+    nonce,
+    factory: null,
+    factoryData: null,
+    callData: encodeSafeCalls([call], params),
+    callGasLimit: '0',
+    verificationGasLimit: '0',
+    preVerificationGas: '0',
+    ...fees,
+    ...UNSET_PAYMASTER,
+    signature: dummySafeSignature(),
+  };
+}
+
+/**
+ * The operation executes exactly `call` from this deployed Safe: no `factory`, and `callData` is
+ * `executeUserOpWithErrorString(to, value, data, CALL)` for that call (abstractionkit's encoding). Since `callData` is compared byte for byte, a delegatecall or a
+ * batch never matches.
+ */
+export function isTransactionOperation(operation: Record<string, unknown> | null | undefined, call: VaultCall, safe: `0x${string}`, params: SafeParams = DEFAULT_SAFE_PARAMS): boolean {
+  if (!operation) return false;
+  const noFactory = (value: unknown) => value === undefined || value === null;
+  return (
+    sameAddress(operation.sender, safe) &&
+    noFactory(operation.factory) &&
+    noFactory(operation.factoryData) &&
+    typeof operation.callData === 'string' &&
+    sameHex(operation.callData, encodeSafeCalls([call], params))
+  );
+}
+
 /** The signature covers the UserOperation's contents, so they must be compared with what was requested. */
 export function userOperationMatches(operation: UserOperationJson, request: UserOperationRequest, safe: `0x${string}`, params: SafeParams = DEFAULT_SAFE_PARAMS): boolean {
   const expected = buildUserOperation(safe, request, params);

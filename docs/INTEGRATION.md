@@ -74,7 +74,7 @@ The vault operator configures these variables (validated at startup by `apps/vau
 | `HANDOFF_JWKS_CACHE_SECONDS`, `HANDOFF_JWKS_COOLDOWN_SECONDS`, `HANDOFF_JWKS_MAX_STALE_SECONDS` | | Optional. Defaults 300, 30 and 3600 seconds. See [docs/PROTOCOL.md](PROTOCOL.md#jwks-fetching-and-caching) |
 | `ALLOWED_APP_ORIGINS` | Comma-separated exact origins of your apps | Optional. When set, a validly signed token whose `origin` is not listed is rejected with `ORIGIN_NOT_ALLOWED` |
 | `VAULT_SERVICE_TOKEN` | Shared secret for the server-to-server API | At least 32 characters. Your backend sends it as a bearer token. Never send it to a browser |
-| `AA_CHAINS` | Per-chain RPC, bundler and paymaster | Needed for `deploy()` and to use an RPC that carries an API key. See [section 11](#11-networks-deployment-and-paymaster) |
+| `AA_CHAINS` | Per-chain RPC, bundler and paymaster, and whether transactions are sponsored | Needed for `deploy()`, `sendTransaction()` and to use an RPC that carries an API key. See [section 11](#11-networks-deployment-and-paymaster) |
 | `RPC_ALLOWED_HOSTS` | Hosts allowed for an `rpcUrl` carried in your token | Only used when the chain has no `rpcUrl` in `AA_CHAINS` |
 
 You, in turn, need:
@@ -295,7 +295,7 @@ const vault = createVaultClient({ vaultOrigin: 'https://vault.example.com', getT
 - The popup is opened with `window.open('<vaultOrigin>/<route>', 'wl-embedded-wallet-vault', 'popup,width=480,height=760')` and then focused. If `window.open` returns `null`, the method rejects with `POPUP_BLOCKED`.
 - **One popup, one operation at a time.** The window name is fixed, so every operation reuses the same window. Starting a new operation while another is pending (from the same or another client on the same page) navigates the popup to the new route and rejects the pending one with `SUPERSEDED`.
 - **Closing the popup** before the vault has answered rejects with `POPUP_CLOSED`, at any stage: before the vault page has loaded, while `getToken` is still pending (the token it returns afterwards is never sent) or after the request was sent. The SDK checks every 500 ms.
-- **Timeout.** Without `timeoutMs`, a pending operation lasts until the vault answers, the popup is closed, or another operation supersedes it. With `timeoutMs`, it also ends with `TIMEOUT` once that time has passed since the popup was opened, whatever stage the operation is at. Leave enough time for the user to read a review screen and use a passkey. Inside the vault, a passkey prompt times out after 60 seconds; a passkey cancellation during signing or deployment is not final (the user can retry or reject in the popup).
+- **Timeout.** Without `timeoutMs`, a pending operation lasts until the vault answers, the popup is closed, or another operation supersedes it. With `timeoutMs`, it also ends with `TIMEOUT` once that time has passed since the popup was opened, whatever stage the operation is at. Leave enough time for the user to read a review screen and use a passkey. Inside the vault, a passkey prompt times out after 60 seconds; a passkey cancellation during signing, deployment or a transaction is not final (the user can retry or reject in the popup).
 - **The SDK closes the popup only on `TIMEOUT`**, because nothing listens to it any more. Otherwise, after answering, the vault shows a final screen with a "Back to the app" button that focuses your page and closes the popup.
 - **Results are validated.** A result for the operation that does not have the shape its method expects (see [Errors](#errors)) rejects at once with `PROTOCOL_ERROR`; the operation does not wait for the popup to be closed.
 - When an operation ends, whatever the reason, the SDK removes its `message` listener and clears its timers.
@@ -314,6 +314,7 @@ Every method resolves with at least `{ address, owner }`: `address` is the Safe 
 | `signMessage(chain, message)` | `/sign` | `VaultSignature` | Safe signature (ERC-1271) of an EIP-191 message, valid on that chain. Requires the Safe to be deployed there |
 | `signTypedData(chain, typedData)` | `/sign` | `VaultSignature` | Same, for EIP-712 typed data |
 | `signUserOperation(chain, userOperation)` | `/sign` | `VaultUserOperationSignature` | Signs a v0.7 UserOperation for the deployed Safe. **It does not submit it** |
+| `sendTransaction({ chain, to, value?, data? })` | `/transaction` | `VaultTransactionResult` | Sends one call from the deployed Safe on that chain. The vault server builds the UserOperation and the vault submits it and waits for the receipt. See [Sending a transaction](#sending-a-transaction) |
 | `unlock()` | `/unlock` | `VaultAccount` | Checks that shares A and B rebuild the seed (a recovery drill) |
 | `recover()` | `/recover` | `VaultAccount` | Lost passkey: rebuilds with A and C (or with the kit) and creates a new passkey and code, for the same Safe |
 | `export()` | `/export` | `VaultAccount` | Opens the seed export flow in the vault. The seed never reaches the SDK |
@@ -326,6 +327,8 @@ type VaultAccount = { address: `0x${string}`; owner: `0x${string}` };
 type VaultSignature = VaultAccount & { signature: `0x${string}` };
 type VaultUserOperationSignature = VaultSignature & { userOperation: UserOperationJson };
 type VaultDeployment = VaultAccount & { userOpHash?: `0x${string}`; transactionHash?: `0x${string}` };
+// Included on-chain, and its call succeeded.
+type VaultTransactionResult = VaultAccount & { chainId: number; userOpHash: `0x${string}`; transactionHash: `0x${string}` };
 ```
 
 Request types (from `@wl-embedded-wallet/core/operations`, re-exported by all three SDK entry points):
@@ -351,6 +354,14 @@ type UserOperationRequest = {
   maxFeePerGas: string;
   maxPriorityFeePerGas: string;
 };
+
+// `sendTransaction`'s argument (`@wl-embedded-wallet/sdk/client`). `value` in wei, default 0.
+interface VaultTransactionRequest {
+  chain: VaultChain;
+  to: `0x${string}`;
+  value?: bigint | string;
+  data?: `0x${string}`;
+}
 ```
 
 The vault validates every signing request before showing it; anything that does not pass is answered with `INVALID_REQUEST` and nothing is signed. The limits, from `packages/core/src/sign-request.ts`:
@@ -358,6 +369,7 @@ The vault validates every signing request before showing it; anything that does 
 - `message`: a non-empty string of at most 10,000 characters.
 - `typedData`: only the keys `domain`, `types`, `primaryType`, `message`; at most 64,000 characters as JSON; `primaryType` must be a key of `types`; it must hash with viem's `hashTypedData`.
 - `userOperation`: only the keys listed above; 1 to 16 calls; every quantity a decimal string (no leading zeros, at most 2^256 - 1); `callGasLimit`, `verificationGasLimit` and `maxFeePerGas` greater than zero; `maxPriorityFeePerGas <= maxFeePerGas`. Each call has only `to` (an address), `value` (decimal) and optional `data` (even-length hex, at most 128,000 characters).
+- `sendTransaction`: the same rules as one call. The SDK checks them before opening the popup (`to` a 20-byte hex address; `value` a `bigint` or a decimal string between 0 and 2^256 - 1; `data` even-length hex) and rejects with `INVALID_REQUEST` without opening it. It sends `value` as a decimal string and drops an empty `data` (`0x`).
 
 The vault's review screen shows the requesting origin (already verified against the token), the network and the decoded request. A compromised app can still request any signature: the last barrier is the user reading the review screen.
 
@@ -375,6 +387,51 @@ const { signature } = await vault.signMessage(chain, 'Sign in to Example App');
 ```
 
 Then send the signature to your backend and verify it there ([section 6](#6-verifying-results-on-your-backend)).
+
+### Sending a transaction
+
+`sendTransaction` sends one call (`to`, `value`, `data`) from the user's Safe, always as a CALL: a delegatecall or a batch cannot be requested. Your app chooses only the call. The vault server builds the UserOperation (nonce from the EntryPoint, fees and gas within its caps, paymaster fields only where the chain sponsors transactions); the popup shows it, the user approves it with the passkey, and the vault submits it and waits up to 3 minutes for the receipt.
+
+```ts
+import { encodeFunctionData, erc20Abi, parseEther } from 'viem';
+
+const chain = { chainId: 11155111 };
+
+// A native transfer: 0.01 ETH, paid from the Safe's balance.
+const { userOpHash, transactionHash } = await vault.sendTransaction({ chain, to: '0xRecipient...', value: parseEther('0.01') });
+
+// A contract call: an ERC-20 transfer of 5 tokens with 6 decimals. `value` defaults to 0.
+const data = encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: ['0xRecipient...', 5_000_000n] });
+await vault.sendTransaction({ chain, to: '0xToken...', data });
+```
+
+(Not taken from the demo. The demo's wallet page groups its signing panels in tabs, Message (EIP-191), Typed data (EIP-712) and Transaction; its Transaction tab, in `examples/demo/app/wallet/sign-forms.tsx`, converts an amount in native units with `parseEther` and calls `client.sendTransaction({ chain, ...call })`.)
+
+Requirements:
+
+- **The Safe must be deployed on that chain** (`deploy(chain)` first). Otherwise the popup answers `WALLET_NOT_DEPLOYED`. The chain needs a `bundlerUrl` in `AA_CHAINS` (`CHAIN_NOT_SUPPORTED` otherwise).
+- **Who pays the fee.** Only if the vault operator set `"sponsorTransactions": true` for that chain (with a `paymasterUrl`) does the paymaster pay it. Otherwise the Safe pays it in the native currency: its balance must cover `value` plus the maximum fee, `(callGasLimit + verificationGasLimit + preVerificationGas) × maxFeePerGas`, or the vault refuses with `INSUFFICIENT_FUNDS` before anything is sent. `value` is always paid by the Safe. Whether a chain sponsors transactions is `transactionsSponsored` in the [server-to-server API](#7-server-to-server-api).
+- **No calls to the Safe itself with data** (`CALL_NOT_ALLOWED`): they could change its owners, modules or guard. A value-only transfer to the Safe itself is allowed.
+
+What the user reviews in the popup: your verified origin, the network and its RPC host, the Safe, the recipient, the amount with the chain's native currency symbol, the data in hex and, when it matches, the decoded ERC-20 `transfer` or `approve` (with a caution for `approve`, and a caution for data it cannot decode), and either "Sponsored" or the maximum network fee.
+
+The promise resolves only once the operation was included on-chain and its call succeeded, with `{ address, owner, chainId, userOpHash, transactionHash }`. Otherwise it rejects; the codes specific to this method:
+
+| Code | Meaning |
+|---|---|
+| `TRANSACTION_REVERTED` | Included on-chain, but the call failed. The fee was paid. The popup shows the hashes; the app does not receive them |
+| `TRANSACTION_TIMEOUT` | Sent, but no receipt within 3 minutes. It may still be included: check before sending again. The popup shows the UserOperation hash |
+| `CALL_REVERTED` | The bundler's simulation says the call would fail. Nothing was sent |
+| `INSUFFICIENT_FUNDS` | The Safe cannot pay `value` (and, when not sponsored, the fee). Nothing was sent |
+| `SPONSORSHIP_REJECTED` | The paymaster refused (for example, its policy is inactive or out of funds). Nothing was sent |
+| `NONCE_CONFLICT` | Another operation from the Safe went through first. Nothing was sent; retry |
+| `TRANSACTION_EXPIRED` | The user took more than 10 minutes to approve; the prepared fees are no longer accepted. Nothing was sent; retry |
+| `TRANSACTION_IN_PROGRESS` | This exact operation is already being sent |
+| `TRANSACTION_FAILED` | The bundler did not accept the operation, or the vault refused it for a reason not listed here |
+
+`USER_REJECTED`, `WALLET_NOT_DEPLOYED`, `CALL_NOT_ALLOWED`, `FEES_TOO_HIGH`, `GAS_LIMIT_EXCEEDED`, `RATE_LIMITED`, the `CHAIN_*` codes, `INVALID_REQUEST` and `UNAUTHORIZED` can also come back ([Errors](#errors)). `TRANSACTION_REVERTED` and `TRANSACTION_TIMEOUT` mean the operation was sent. So may `POPUP_CLOSED`, `TIMEOUT` or `NETWORK` once the user has approved, since the vault may have submitted it before: check the Safe's activity before asking the user to send it again.
+
+`signUserOperation` is unchanged: it signs an operation you build and submit yourself ([section 6](#signuseroperation)), and the vault never submits it.
 
 ### Errors
 
@@ -399,6 +456,7 @@ Codes produced by the SDK itself (`VaultErrorCode`):
 | `NOT_IN_BROWSER` | No `window` and no `host` |
 | `TIMEOUT` | `timeoutMs` passed before the vault answered. The SDK closed the popup |
 | `PROTOCOL_ERROR` | The vault's result for this operation was malformed (see below) |
+| `INVALID_REQUEST` | `sendTransaction` with a malformed call or chain. The popup was not opened |
 | `INTERNAL` | `window.open` threw, or the request could not be posted to the popup (for example, a `typedData` that cannot be cloned) |
 
 What the SDK validates in a result for its own operation (same `protocol`, `type: 'result'` and `id`; other messages are ignored). Anything else is `PROTOCOL_ERROR`:
@@ -406,11 +464,12 @@ What the SDK validates in a result for its own operation (same `protocol`, `type
 - `ok` must be `true` or `false`. `ok: false` must carry a non-empty string `code`, which becomes the error's `code`.
 - Every `ok: true` result: `address` and `owner` are 20-byte hex addresses (`0x` and 40 hex digits, any case).
 - `deploy`: either both `userOpHash` and `transactionHash`, each 32-byte hex (`0x` and 64 hex digits), or neither.
+- `sendTransaction`: both `userOpHash` and `transactionHash` as 32-byte hex, and `chainId` equal to the requested chain's.
 - `signMessage`, `signTypedData`: `signature` is non-empty, even-length hex with `0x`.
 - `signUserOperation`: the same `signature`, and a `userOperation` with every `UserOperationJson` field: `sender` an address equal (ignoring case) to `address`; `nonce`, `callGasLimit`, `verificationGasLimit`, `preVerificationGas`, `maxFeePerGas`, `maxPriorityFeePerGas` decimal strings without leading zeros; `callData` even-length hex; `factory` and `paymaster` an address or `null`; `factoryData` and `paymasterData` even-length hex or `null`; `paymasterVerificationGasLimit` and `paymasterPostOpGasLimit` a decimal string or `null`; `signature` equal to the result's `signature`.
 - Fields a method does not define are dropped (for example, a seed in an `export` result, or extra keys in `userOperation`).
 
-Any other code is the one the vault returned, passed through unchanged. The codes the vault can return, from the vault's sources (`packages/core/src/errors.ts`, `apps/vault/lib/prf.ts` and the flow pages under `apps/vault/app/`):
+Any other code is the one the vault returned, passed through unchanged. The codes the vault can return, from the vault's sources (`packages/core/src/errors.ts`, `apps/vault/lib/prf.ts`, `apps/vault/lib/error-text.ts`, `apps/vault/lib/aa-client.ts` and the flow pages under `apps/vault/app/`):
 
 | Code | Meaning |
 |---|---|
@@ -423,17 +482,18 @@ Any other code is the one the vault returned, passed through unchanged. The code
 | `NO_WALLET` | The user has no wallet yet |
 | `WALLET_ALREADY_EXISTS` | `relink()` on an account that already has a wallet |
 | `RELINK_REJECTED` | The owner's signature or the relink challenge was invalid or expired. Nothing changed. The popup shows it and posts it to the app; to retry, call `relink()` again |
-| `WALLET_NOT_DEPLOYED` | Deploy the Safe on that chain before signing |
-| `CHAIN_NOT_SUPPORTED` | No usable RPC for the chain, missing contracts, a different predicted address, or (for `deploy`) no bundler configured |
+| `WALLET_NOT_DEPLOYED` | Deploy the Safe on that chain before signing or sending a transaction |
+| `CHAIN_NOT_SUPPORTED` | No usable RPC for the chain, missing contracts, a different predicted address, or (for `deploy` and `sendTransaction`) no bundler configured |
 | `CHAIN_MISMATCH` | The RPC reports another chain id |
 | `CHAIN_UNAVAILABLE` | The chain could not be queried |
-| `INSUFFICIENT_FUNDS` | The Safe has no funds to pay for its deployment and the chain has no paymaster |
-| `DEPLOY_FAILED` | The deployment UserOperation failed, no receipt arrived, or the vault refused it for a reason not listed here |
-| `FEES_TOO_HIGH` | `deploy`: the network's fees are above the vault's cap. Nothing was sent; retry later |
-| `GAS_LIMIT_EXCEEDED` | `deploy`: the deployment would need more gas than the vault's caps allow. Nothing was sent; tell the vault operator |
+| `INSUFFICIENT_FUNDS` | The Safe cannot pay for the operation: its deployment on a chain without a paymaster, or a transaction's `value` (plus its fee, when not sponsored). Also the bundler's `AA21`. Nothing was sent |
+| `DEPLOY_FAILED` | The deployment UserOperation failed, no receipt arrived, or the vault or the bundler refused it for a reason not listed here (a paymaster rejection is `SPONSORSHIP_REJECTED`, a nonce conflict `NONCE_CONFLICT`) |
+| `CALL_NOT_ALLOWED`, `CALL_REVERTED`, `SPONSORSHIP_REJECTED`, `NONCE_CONFLICT`, `TRANSACTION_*` | See [Sending a transaction](#sending-a-transaction). `SPONSORSHIP_REJECTED` and `NONCE_CONFLICT` can also come from `deploy` |
+| `FEES_TOO_HIGH` | `deploy`, `sendTransaction`: the network's fees are above the vault's cap. Nothing was sent; retry later |
+| `GAS_LIMIT_EXCEEDED` | `deploy`, `sendTransaction`: the operation would need more gas than the vault's caps allow. Nothing was sent; tell the vault operator |
 | `ALREADY_SPONSORED` | `deploy`: a deployment of this Safe on this chain was already sent recently (`AA_DEPLOYMENT_RETRY_SECONDS`, 15 minutes by default). Wait for it, then check the status |
 | `DEPLOYMENT_IN_PROGRESS` | `deploy`: another request is submitting this Safe's deployment. Retry in a moment |
-| `RATE_LIMITED` | Any action: one of the vault's rate limits or budgets was exceeded (HTTP 429 on token redemption, share A, enrollment, kit-free recovery, relink, the chain status or the deployment proxy). Retry later |
+| `RATE_LIMITED` | Any action: one of the vault's rate limits or budgets was exceeded (HTTP 429 on token redemption, share A, enrollment, kit-free recovery, relink, the chain status, the deployment and transaction proxy, or preparing transactions). Retry later |
 | `MANIFEST_INVALID`, `SHARE_TAMPERED`, `ADDRESS_MISMATCH`, `FORMAT_UNSUPPORTED`, `KDF_PARAMS_INVALID`, `COMBINE_FAILED` | Stored data failed an integrity check. The operation stops before the seed is used |
 | `DECRYPT_FAILED` | Wrong passkey or recovery code, or tampered data |
 | `BAD_RECOVERY_CODE`, `INVALID_KIT`, `NO_SEED_BACKUP`, `RECOVERY_FAILED` | Recovery-flow failures (see [docs/RECOVERY.md](RECOVERY.md)) |
@@ -502,6 +562,10 @@ async function verifySafeSignature(
 
 **Replay across apps:** a message signature made in one app is valid wherever that Safe and chain are, including in another app that shares the wallet. Use messages that name their domain (SIWE, or EIP-712 with a domain).
 
+### `sendTransaction`
+
+The result reports what the vault saw: the operation was included and its call succeeded. If your backend acts on it (for example, it credits a payment), confirm it with your own RPC: the receipt of `transactionHash` must contain the EntryPoint v0.7 `UserOperationEvent` with that `userOpHash`, `sender` equal to the user's Safe (from the vault, server-to-server) and `success` true.
+
 ### `signUserOperation`
 
 The vault builds the UserOperation from your `UserOperationRequest` (`buildUserOperation`: `sender` is the Safe, `factory` and `paymaster` fields are `null`, `callData` encodes your calls with Safe's single-call or MultiSend encoding) and signs the Safe operation hash with the owner. `signature` in the result equals `userOperation.signature`: 12 bytes of `validAfter`/`validUntil` followed by the owner's 65-byte ECDSA signature.
@@ -528,9 +592,9 @@ async function verifyUserOperation(
 
 (Condensed from `examples/demo/server/verify.ts`; the demo also wraps both calls in `try`/`catch` and treats a throw as invalid.)
 
-3. Submit it yourself. The vault never submits arbitrary UserOperations: its bundler proxy only accepts the deployment of the session's Safe. Convert it with `toRpcUserOperation(userOperation)` (hex quantities, empty fields omitted, the ERC-7769 JSON-RPC shape) and send it with `eth_sendUserOperation` to your bundler, with `DEFAULT_SAFE_PARAMS.entryPoint` (EntryPoint v0.7) as the second parameter. `userOperationHash(userOperation, chainId)` computes the hash the bundler will return.
+3. Submit it yourself. The vault never submits a UserOperation it did not build: its bundler proxy only accepts the deployment of the session's Safe and the transactions it prepared itself for `sendTransaction`. Convert it with `toRpcUserOperation(userOperation)` (hex quantities, empty fields omitted, the ERC-7769 JSON-RPC shape) and send it with `eth_sendUserOperation` to your bundler, with `DEFAULT_SAFE_PARAMS.entryPoint` (EntryPoint v0.7) as the second parameter. `userOperationHash(userOperation, chainId)` computes the hash the bundler will return.
 
-Because the signature covers the paymaster fields, which the vault leaves empty, a paymaster cannot be attached after signing: the Safe must pay for the operation itself. You choose the nonce and gas values in the request; the vault does not estimate them.
+Because the signature covers the paymaster fields, which the vault leaves empty, a paymaster cannot be attached after signing: the Safe must pay for the operation itself. You choose the nonce and gas values in the request; the vault does not estimate them. To have the vault build, sponsor (where configured) and submit the operation instead, use `sendTransaction`.
 
 ## 7. Server-to-server API
 
@@ -553,10 +617,10 @@ curl -H "Authorization: Bearer $VAULT_SERVICE_TOKEN" "$VAULT_ORIGIN/api/s2s/acco
 ```
 
 ```json
-{ "exists": true, "address": "0xSafe...", "owner": "0xOwner...", "chainId": 11155111, "deployed": false, "deployable": true, "sponsored": true }
+{ "exists": true, "address": "0xSafe...", "owner": "0xOwner...", "chainId": 11155111, "deployed": false, "deployable": true, "sponsored": true, "transactionsSponsored": false }
 ```
 
-- `deployed`: whether the Safe has code on that chain. `deployable`: whether the vault can deploy it there (it is not deployed and the chain has a `bundlerUrl` in `AA_CHAINS`). `sponsored`: whether the chain has a `paymasterUrl`.
+- `deployed`: whether the Safe has code on that chain. `deployable`: whether the vault can deploy it there (it is not deployed and the chain has a `bundlerUrl` in `AA_CHAINS`). `sponsored`: whether the chain has a `paymasterUrl` (the deployment is sponsored). `transactionsSponsored`: whether `sendTransaction` is sponsored too (a `paymasterUrl` and `"sponsorTransactions": true`); when `false`, the Safe pays the fee of its transactions.
 - If the chain cannot be used: `{ ..., "deployed": null, "deployable": false, "chainError": "CHAIN_NOT_SUPPORTED" }` (or `CHAIN_MISMATCH`, `CHAIN_UNAVAILABLE`).
 - If the chain has no `rpcUrl` in `AA_CHAINS`, add `&rpcUrl=` with a URL whose host is in the vault's `RPC_ALLOWED_HOSTS`.
 - A `chainId` that is not a positive safe integer: `400 { "error": "INVALID_CHAIN_ID" }`, whether or not the user has a wallet. A valid `chainId` is ignored for a user without a wallet.
@@ -647,7 +711,7 @@ If anything fails, it refuses the network (`CHAIN_MISMATCH` or `CHAIN_NOT_SUPPOR
 
 **Risk:** changing the owner on one network does not propagate, and on networks where the Safe is not deployed yet it is always created with the original owner. If the owner key is stolen, changing the owner on one network is not enough elsewhere.
 
-`AA_CHAINS` (vault side) is a JSON object keyed by chain id: `{ name?, rpcUrl?, bundlerUrl, bundlerHeaders?, paymasterUrl?, paymasterHeaders?, paymasterContext?, limits? }`. `deploy()` needs a `bundlerUrl`; `paymasterUrl` requires `bundlerUrl`. `limits` overrides the sponsorship caps for that chain; set it on every L2 ([docs/DEPLOYMENT.md](DEPLOYMENT.md#sponsorship-limits)).
+`AA_CHAINS` (vault side) is a JSON object keyed by chain id: `{ name?, rpcUrl?, bundlerUrl, bundlerHeaders?, paymasterUrl?, paymasterHeaders?, paymasterContext?, sponsorTransactions?, limits? }`. `deploy()` and `sendTransaction()` need a `bundlerUrl`; `paymasterUrl` requires `bundlerUrl`. `sponsorTransactions` (default `false`; `true` requires `paymasterUrl`) makes the paymaster pay for transactions too, not only deployments. `limits` overrides the sponsorship caps for that chain; set it on every L2 ([docs/DEPLOYMENT.md](DEPLOYMENT.md#sponsorship-limits)).
 
 The vault speaks [ERC-7677](https://eips.ethereum.org/EIPS/eip-7677) to the chain's `paymasterUrl`, so you can use a provider or your own service, which is where your gas policy lives:
 
@@ -658,13 +722,13 @@ The vault speaks [ERC-7677](https://eips.ethereum.org/EIPS/eip-7677) to the chai
 
 The answer is the ERC-7677 one: `paymaster`, `paymasterData` and optionally `paymasterVerificationGasLimit` and `paymasterPostOpGasLimit`. Your policy should:
 
-- **Cap spending** per user, chain and day. Every deployment spends your balance. The vault bounds each deployment with its own gas and fee caps ([docs/DEPLOYMENT.md](DEPLOYMENT.md#sponsorship-limits)), sends at most one per Safe and chain within `AA_DEPLOYMENT_RETRY_SECONDS`, and rate-limits requests, but it does not know your budget.
+- **Cap spending** per user, chain and day. Every deployment spends your balance, and so does every transaction on a chain with `sponsorTransactions`: a sponsored transaction can be any call the user approves, and the vault limits how many there are only through its rate limits. The vault bounds each operation with its own gas and fee caps ([docs/DEPLOYMENT.md](DEPLOYMENT.md#sponsorship-limits)), sends at most one deployment per Safe and chain within `AA_DEPLOYMENT_RETRY_SECONDS`, and rate-limits requests (the `transaction` scope for preparing transactions), but it does not know your budget. With Pimlico, set per-user and global spending limits on the sponsorship policy.
 - **Authenticate the vault** with `paymasterHeaders`. The URL must not be public.
 - **Identify the policy** with `paymasterContext`, which the vault server sets; the browser does not choose it.
 
-The vault's server **builds the deployment of the session's Safe itself**, on the session's chain, calling `pm_getPaymasterStubData` and then `pm_getPaymasterData` for each prepared deployment, and forwards only that operation, signed by the owner. Other UserOperations are signed but not sent: receive the signed UserOperation on your backend and submit it ([section 6](#signuseroperation)), or wait for the submission phase in [docs/ROADMAP.md](ROADMAP.md).
+The vault's server **builds the deployment of the session's Safe itself**, on the session's chain, calling `pm_getPaymasterStubData` and then `pm_getPaymasterData` for each prepared deployment, and forwards only that operation, signed by the owner. It does the same for each `sendTransaction`, with the paymaster calls only where `sponsorTransactions` is on. Operations from `signUserOperation` are signed but not sent: receive the signed UserOperation on your backend and submit it ([section 6](#signuseroperation)).
 
-This path has been tested with a real paymaster contract on `anvil`, not with real providers. See [docs/TEST-STATUS.md](TEST-STATUS.md).
+This path, deployments and transactions, has been tested with a real paymaster contract on `anvil`, not with real providers. See [docs/TEST-STATUS.md](TEST-STATUS.md).
 
 ## 12. API reference
 
@@ -676,10 +740,11 @@ Browser only. Re-exports everything in `/protocol`.
 |---|---|---|
 | `createVaultClient(options: VaultClientOptions): VaultClient` | function | See [section 5](#createvaultclientoptions) |
 | `VaultError` | class | `extends Error`, `name = 'VaultError'`, `readonly code: string`, `message === code` |
-| `VaultErrorCode` | type | `'POPUP_BLOCKED' \| 'POPUP_CLOSED' \| 'TOKEN_UNAVAILABLE' \| 'SUPERSEDED' \| 'NOT_IN_BROWSER' \| 'TIMEOUT' \| 'PROTOCOL_ERROR' \| 'INTERNAL'` |
+| `VaultErrorCode` | type | `'INVALID_REQUEST' \| 'POPUP_BLOCKED' \| 'POPUP_CLOSED' \| 'TOKEN_UNAVAILABLE' \| 'SUPERSEDED' \| 'NOT_IN_BROWSER' \| 'TIMEOUT' \| 'PROTOCOL_ERROR' \| 'INTERNAL'` |
 | `VaultClientOptions` | type | `{ vaultOrigin: string; getToken: (chain?: VaultChain) => Promise<string>; timeoutMs?: number; host?: VaultHost }` |
-| `VaultClient` | type | The nine methods in [section 5](#methods) |
-| `VaultAccount`, `VaultSignature`, `VaultUserOperationSignature`, `VaultDeployment` | types | Method results |
+| `VaultClient` | type | The ten methods in [section 5](#methods) |
+| `VaultAccount`, `VaultSignature`, `VaultUserOperationSignature`, `VaultDeployment`, `VaultTransactionResult` | types | Method results |
+| `VaultTransactionRequest` | type | `sendTransaction`'s argument: `{ chain: VaultChain; to; value?: bigint \| string; data? }` |
 | `VaultHost`, `VaultPopup` | types | The window surface the SDK uses, for injection in tests |
 
 ```ts
@@ -689,6 +754,7 @@ interface VaultClient {
   signMessage(chain: VaultChain, message: string): Promise<VaultSignature>;
   signTypedData(chain: VaultChain, typedData: TypedDataRequest): Promise<VaultSignature>;
   signUserOperation(chain: VaultChain, userOperation: UserOperationRequest): Promise<VaultUserOperationSignature>;
+  sendTransaction(request: VaultTransactionRequest): Promise<VaultTransactionResult>;
   unlock(): Promise<VaultAccount>;
   recover(): Promise<VaultAccount>;
   export(): Promise<VaultAccount>;
@@ -793,7 +859,7 @@ Node.js only. Nothing in it reads the environment.
 | `createVaultServiceClient` | `(options: VaultServiceClientOptions) => VaultServiceClient` | See [section 7](#7-server-to-server-api) |
 | `VaultServiceClientOptions` | type | `{ vaultOrigin: string; serviceToken: string; fetch?: typeof fetch; timeoutMs?: number }` (`fetch` for tests; `timeoutMs` default 15000) |
 | `VaultServiceClient` | type | `{ getAccount(sub: string, chain?: { chainId: number; rpcUrl?: string }): Promise<VaultServiceAccount> }` |
-| `VaultServiceAccount` | type | `{ exists: false; address: null; owner: null }` or `{ exists: true; address; owner; chainId?; deployed?: boolean \| null; deployable?; sponsored?; chainError? }` |
+| `VaultServiceAccount` | type | `{ exists: false; address: null; owner: null }` or `{ exists: true; address; owner; chainId?; deployed?: boolean \| null; deployable?; sponsored?; transactionsSponsored?; chainError? }` |
 | `VaultUnavailableError` | class | `name = 'VaultUnavailableError'`, `message = 'VAULT_UNAVAILABLE'` |
 
 **Safe helpers** (re-exported from `@wl-embedded-wallet/core/safe`; Safe 4337 with modules 0.3.0 and EntryPoint v0.7; no network access, no keys). `params` always defaults to `DEFAULT_SAFE_PARAMS`.
@@ -818,6 +884,9 @@ Node.js only. Nothing in it reads the environment.
 | `deploymentCalls` | `(safe) => VaultCall[]` | The empty self-call executed by the sponsored deployment |
 | `buildDeploymentOperation` | `(owner, fees: { maxFeePerGas; maxPriorityFeePerGas }, params?) => UserOperationJson` | The deployment operation, with a dummy signature and zero gas limits |
 | `isDeploymentOperation` | `(operation, owner, params?) => boolean` | Whether an operation is exactly the deployment of that owner's Safe |
+| `buildTransactionOperation` | `(safe, call: VaultCall, nonce, fees, params?) => UserOperationJson` | The unsigned operation for one call from a deployed Safe (`executeUserOpWithErrorString`, a CALL), with a dummy signature and zero gas limits |
+| `isTransactionOperation` | `(operation, call, safe, params?) => boolean` | Whether an operation executes exactly that call from that Safe, with no `factory` |
+| `isAllowedTransactionCall` | `(safe, call) => boolean` | `false` for a call to the Safe itself with data |
 | `dummySafeSignature` | `() => string` | A placeholder signature for gas estimation |
 | `signSafeOperation` | `(operation, chainId, params, signer: { address; signHash(hash) }) => Promise<string>` | Signs with an external signer. The vault uses it; integrators normally do not |
 | `DEFAULT_SAFE_PARAMS` | `SafeParams` | EntryPoint, factory, singleton, Safe 4337 module, module setup, MultiSend, salt nonce |
@@ -826,4 +895,4 @@ Node.js only. Nothing in it reads the environment.
 
 `/server` also re-exports the types `TypedDataRequest`, `UserOperationJson`, `UserOperationRequest`, `VaultCall` and `VaultSignRequest`.
 
-**Not exported:** there is no server-side signing function for user wallets, no function to submit UserOperations, and no client-side verification helper. Verification is meant to run on your backend.
+**Not exported:** there is no server-side signing function for user wallets, no server-side function to submit UserOperations, and no client-side verification helper. Verification is meant to run on your backend.

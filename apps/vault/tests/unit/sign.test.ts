@@ -1,11 +1,12 @@
-import { deploymentCalls, encodeSafeCalls, predictSafeAddress, recoverSafeMessageSigner, recoverSafeOperationSigner, requestHash, smartAccountFor, buildDeploymentOperation, buildUserOperation } from '@wl-embedded-wallet/core/safe';
+import { deploymentCalls, encodeSafeCalls, predictSafeAddress, recoverSafeMessageSigner, recoverSafeOperationSigner, requestHash, smartAccountFor, buildDeploymentOperation, buildTransactionOperation, buildUserOperation } from '@wl-embedded-wallet/core/safe';
+import { encodeFunctionData, parseAbi } from 'viem';
 import type { UserOperationRequest } from '@wl-embedded-wallet/sdk/protocol';
 import { combineMnemonic } from '@tetherto/wdk-utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { randomBytes } from '@wl-embedded-wallet/core/encoding';
 import { handleWorkerRequest } from '@wl-embedded-wallet/core/signer';
 import { signManifest, WDK_UTILS_VERSION } from '@wl-embedded-wallet/core/manifest';
-import type { SignRequest, SignWorkerRequest } from '@wl-embedded-wallet/core/types';
+import type { SendTransactionWorkerRequest, SignRequest, SignWorkerRequest } from '@wl-embedded-wallet/core/types';
 import { CHAIN_ID, expectOk, flipBit, makeSecrets, makeServer, SET_ID, USER } from './helpers';
 
 vi.mock('@tetherto/wdk-utils', async (importOriginal) => {
@@ -237,5 +238,109 @@ describe('op deploy', () => {
 
   it('a signing UserOperation never carries a factory', () => {
     expect(buildUserOperation(TO as `0x${string}`, OPERATION)).toMatchObject({ factory: null, factoryData: null });
+  });
+});
+
+describe('op send-transaction', () => {
+  const FEES = { maxFeePerGas: '30000000000', maxPriorityFeePerGas: '1000000000' };
+  const CALL = { to: TO as `0x${string}`, value: '1000000000000000', data: '0xa9059cbb' as `0x${string}` };
+  const DELEGATECALL = parseAbi(['function executeUserOpWithErrorString(address to, uint256 value, bytes data, uint8 operation)']);
+
+  async function sendSetup() {
+    const context = await setup();
+    // What the vault server returns after estimating: gas filled in, still the dummy signature.
+    const userOperation = { ...buildTransactionOperation(context.safe, CALL, '4', FEES), callGasLimit: '100000', verificationGasLimit: '200000', preVerificationGas: '60000' };
+    const request = (changes: Partial<SendTransactionWorkerRequest> = {}): SendTransactionWorkerRequest => ({
+      op: 'send-transaction',
+      chainId: CHAIN_ID,
+      signed: context.signed,
+      encB: context.encB,
+      prf: context.secrets.prf(),
+      transaction: CALL,
+      userOperation,
+      ...changes,
+    });
+    return { ...context, userOperation, request };
+  }
+
+  it('signs the reviewed call from the deployed Safe, recoverable to the owner', async () => {
+    const { server, safe, owner, userOperation, request } = await sendSetup();
+    const response = expectOk(await handleWorkerRequest(request(), server.deps));
+    expect(response).toMatchObject({ address: safe, owner, signature: expect.stringMatching(/^0x[0-9a-f]+$/) });
+    expect(response.userOperation).toEqual({ ...userOperation, signature: response.signature });
+    expect(await recoverSafeOperationSigner(response.userOperation!, CHAIN_ID)).toBe(owner);
+    expect(await recoverSafeOperationSigner(response.userOperation!, CHAIN_ID + 1)).not.toBe(owner);
+    expect(await recoverSafeOperationSigner({ ...response.userOperation!, nonce: '5' }, CHAIN_ID)).not.toBe(owner);
+    expect(Object.keys(response).sort()).toEqual(['address', 'ok', 'owner', 'signature', 'userOperation', 'wdkVersionMismatch']);
+    expect(server.fetched).toEqual([SET_ID]);
+    expect(combineMnemonic).toHaveBeenCalledTimes(1);
+  });
+
+  it('a self-transfer of value without data is allowed', async () => {
+    const { server, safe, owner, request } = await sendSetup();
+    const transaction = { to: safe, value: '1' };
+    const userOperation = { ...buildTransactionOperation(safe, transaction, '4', FEES), callGasLimit: '100000', verificationGasLimit: '200000', preVerificationGas: '60000' };
+    const response = expectOk(await handleWorkerRequest(request({ transaction, userOperation }), server.deps));
+    expect(await recoverSafeOperationSigner(response.userOperation!, CHAIN_ID)).toBe(owner);
+  });
+
+  it('overwrites prf, whether it signs or not', async () => {
+    const { server, request } = await sendSetup();
+    const signed = request();
+    expectOk(await handleWorkerRequest(signed, server.deps));
+    expect(signed.prf.every((byte) => byte === 0)).toBe(true);
+    const refused = request({ chainId: CHAIN_ID + 1 });
+    expect((await handleWorkerRequest(refused, server.deps)).ok).toBe(false);
+    expect(refused.prf.every((byte) => byte === 0)).toBe(true);
+  });
+
+  describe('does not use the seed', () => {
+    const expectRefused = async (setupResult: Awaited<ReturnType<typeof sendSetup>>, req: SendTransactionWorkerRequest, code: string) => {
+      const response = await handleWorkerRequest(req, setupResult.server.deps);
+      expect(response).toEqual({ ok: false, code });
+      expect(setupResult.server.fetched).toHaveLength(0);
+      expect(combineMnemonic).not.toHaveBeenCalled();
+    };
+
+    it.each([
+      ['another call', (op: Record<string, unknown>) => ({ ...op, callData: encodeSafeCalls([{ to: TO, value: '1' }]) })],
+      ['a batch of the same call', (op: Record<string, unknown>) => ({ ...op, callData: encodeSafeCalls([CALL, CALL]) })],
+      [
+        'a delegatecall of the same call',
+        (op: Record<string, unknown>) => ({
+          ...op,
+          callData: encodeFunctionData({ abi: DELEGATECALL, functionName: 'executeUserOpWithErrorString', args: [CALL.to, BigInt(CALL.value), CALL.data, 1] }),
+        }),
+      ],
+      ['another sender', (op: Record<string, unknown>) => ({ ...op, sender: TO })],
+      ['a factory', (op: Record<string, unknown>, owner: string) => ({ ...op, ...buildDeploymentOperation(owner, FEES), callData: op.callData, sender: op.sender })],
+    ])('INTERNAL with an operation that executes %s', async (_label, change) => {
+      const context = await sendSetup();
+      const userOperation = change(context.userOperation as unknown as Record<string, unknown>, context.owner) as unknown as SendTransactionWorkerRequest['userOperation'];
+      await expectRefused(context, context.request({ userOperation }), 'INTERNAL');
+    });
+
+    it('CALL_NOT_ALLOWED for a call from the Safe to itself with data', async () => {
+      const context = await sendSetup();
+      const transaction = { to: context.safe, value: '0', data: '0x0d582f13' as `0x${string}` };
+      const userOperation = buildTransactionOperation(context.safe, transaction, '4', FEES);
+      await expectRefused(context, context.request({ transaction, userOperation }), 'CALL_NOT_ALLOWED');
+    });
+
+    it('WALLET_NOT_DEPLOYED when the server says the Safe is not deployed on that chain', async () => {
+      const context = await sendSetup();
+      context.server.chain.status = { ...context.server.chain.status, deployed: false, deployable: true };
+      await expectRefused(context, context.request(), 'WALLET_NOT_DEPLOYED');
+    });
+
+    it('CHAIN_MISMATCH when the request chain is not the session chain', async () => {
+      const context = await sendSetup();
+      await expectRefused(context, context.request({ chainId: CHAIN_ID + 1 }), 'CHAIN_MISMATCH');
+    });
+
+    it('MANIFEST_INVALID with a tampered manifest signature', async () => {
+      const context = await sendSetup();
+      await expectRefused(context, context.request({ signed: { ...context.signed, signature: flipBit(context.signed.signature) } }), 'MANIFEST_INVALID');
+    });
   });
 });

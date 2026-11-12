@@ -13,11 +13,14 @@ export const VAULT_WINDOW_NAME = 'wl-embedded-wallet-vault';
 // whether to sign it into the token. The popup only gets `chainId`, which must match the token's.
 export type VaultChain = { chainId: number; rpcUrl?: string };
 
-// `kind` is also the popup route: /activate, /deploy, /sign, /unlock, /recover, /export or /relink.
+// `kind` is also the popup route: /activate, /deploy, /sign, /transaction, /unlock, /recover, /export or /relink.
 export type VaultAction =
   | { kind: 'activate' }
   | { kind: 'deploy'; chain: { chainId: number } }
   | { kind: 'sign'; chain: { chainId: number }; request: VaultSignRequest }
+  // One call from the deployed Safe, sent on-chain. The vault server builds the UserOperation (nonce, gas, fees,
+  // paymaster); the app only chooses the call. Always a CALL, never a delegatecall.
+  | { kind: 'transaction'; chain: { chainId: number }; transaction: VaultCall }
   | { kind: 'unlock' }
   | { kind: 'recover' }
   // The seed never leaves the vault: the result only carries the addresses.
@@ -48,9 +51,11 @@ export type VaultResult = {
       signature?: `0x${string}`;
       // For `userOperation`, the complete operation with its signature. It is not submitted on-chain.
       userOperation?: UserOperationJson;
-      // `deploy` only. When absent, the Safe was already deployed and nothing was signed.
+      // `deploy` and `transaction`. For `deploy`, when absent, the Safe was already deployed and nothing was signed.
       userOpHash?: `0x${string}`;
       transactionHash?: `0x${string}`;
+      // `transaction` only: the network it was sent on.
+      chainId?: number;
     }
   | { ok: false; code: string }
 );

@@ -589,6 +589,153 @@ export function storeContract(name: string, freshUrl: () => Promise<string>): vo
       });
     });
 
+    describe('prepared transactions', () => {
+      const CHAIN = 2 ** 40;
+      const SAFE = '0xAbCdEf0000000000000000000000000000000001';
+      const NOW = 1_800_000_000_000;
+      const STALE = 60_000;
+      const TTL = 600_000;
+      const HASH_1 = '0x' + 'Ab'.repeat(32);
+      const HASH_2 = '0x' + 'cd'.repeat(32);
+      const USER_OP = '0x' + 'Ef'.repeat(32);
+      const create = (operationHash: string, options: { now?: number; safe?: string; chainId?: number; sponsored?: boolean; target?: VaultStore } = {}) =>
+        (options.target ?? store).createPreparedTransaction({
+          chainId: options.chainId ?? CHAIN,
+          safe: options.safe ?? SAFE,
+          userId: USER,
+          operationHash,
+          operation: `{"hash":"${operationHash}"}`,
+          sponsored: options.sponsored ?? true,
+          now: options.now ?? NOW,
+          expireBefore: (options.now ?? NOW) - TTL,
+        });
+      const claim = (operationHash: string, now = NOW, target: VaultStore = store, safe = SAFE) =>
+        target.claimPreparedTransaction({ chainId: CHAIN, safe, operationHash, now, staleSubmittingMs: STALE });
+      const complete = (operationHash: string, now = NOW, userOpHash = USER_OP, safe = SAFE) =>
+        store.completePreparedTransaction({ chainId: CHAIN, safe, operationHash, userOpHash, now });
+      const release = (operationHash: string, now = NOW) => store.releasePreparedTransaction({ chainId: CHAIN, safe: SAFE, operationHash, now });
+      const get = (operationHash: string, safe = SAFE, chainId = CHAIN) => store.getPreparedTransaction(chainId, safe, operationHash);
+
+      it('is created once per chain, Safe and hash, in lowercase, with every field', async () => {
+        expect(await get(HASH_1)).toBeNull();
+        expect(await create(HASH_1)).toBe(true);
+        expect(await create(HASH_1.toLowerCase(), { now: NOW + 1, sponsored: false })).toBe(false);
+        expect(await store.getPreparedTransaction(CHAIN, SAFE.toLowerCase(), HASH_1.toUpperCase().replace('0X', '0x'))).toEqual({
+          chainId: CHAIN,
+          safe: SAFE.toLowerCase(),
+          userId: USER,
+          operationHash: HASH_1.toLowerCase(),
+          status: 'prepared',
+          operation: `{"hash":"${HASH_1}"}`,
+          sponsored: true,
+          userOpHash: null,
+          preparedAt: NOW,
+          updatedAt: NOW,
+        });
+        expect(await create(HASH_2, { sponsored: false })).toBe(true);
+        expect(await get(HASH_2)).toMatchObject({ sponsored: false, status: 'prepared' });
+      });
+
+      it('is per chain and per Safe', async () => {
+        expect(await create(HASH_1)).toBe(true);
+        expect(await create(HASH_1, { chainId: CHAIN + 1 })).toBe(true);
+        expect(await create(HASH_1, { safe: OTHER_ADDRESS })).toBe(true);
+        expect(await claim(HASH_1)).toBe(true);
+        expect(await get(HASH_1)).toMatchObject({ status: 'submitting' });
+        expect(await get(HASH_1, SAFE, CHAIN + 1)).toMatchObject({ status: 'prepared' });
+        expect(await get(HASH_1, OTHER_ADDRESS)).toMatchObject({ status: 'prepared', safe: OTHER_ADDRESS.toLowerCase() });
+        expect(await get(HASH_2)).toBeNull();
+        expect(await get(HASH_1, ADDRESS)).toBeNull();
+      });
+
+      it('goes from prepared to submitting to sent, and a sent one is never claimable again', async () => {
+        await create(HASH_1);
+        expect(await claim(HASH_2)).toBe(false);
+        expect(await complete(HASH_1, NOW + 1)).toBe(false);
+        expect(await release(HASH_1, NOW + 1)).toBe(false);
+        expect(await claim(HASH_1.toLowerCase(), NOW + 1)).toBe(true);
+        expect(await get(HASH_1)).toMatchObject({ status: 'submitting', preparedAt: NOW, updatedAt: NOW + 1 });
+        expect(await complete(HASH_2, NOW + 2)).toBe(false);
+        expect(await complete(HASH_1, NOW + 2, USER_OP, OTHER_ADDRESS)).toBe(false);
+        expect(await complete(HASH_1, NOW + 2, USER_OP, SAFE.toLowerCase())).toBe(true);
+        expect(await get(HASH_1)).toMatchObject({ status: 'sent', userOpHash: USER_OP.toLowerCase(), updatedAt: NOW + 2 });
+        expect(await complete(HASH_1, NOW + 3, '0xother')).toBe(false);
+        expect(await release(HASH_1, NOW + 3)).toBe(false);
+        expect(await claim(HASH_1, NOW + 3)).toBe(false);
+        expect(await claim(HASH_1, NOW + 10 * STALE)).toBe(false);
+        expect(await get(HASH_1)).toMatchObject({ status: 'sent', userOpHash: USER_OP.toLowerCase() });
+      });
+
+      it('one being submitted is not claimed again until it is stale, and can be released', async () => {
+        await create(HASH_1);
+        expect(await claim(HASH_1)).toBe(true);
+        expect(await claim(HASH_1, NOW + STALE - 1)).toBe(false);
+        expect(await claim(HASH_1, NOW + STALE)).toBe(true);
+        expect(await get(HASH_1)).toMatchObject({ status: 'submitting', updatedAt: NOW + STALE });
+        expect(await release(HASH_2, NOW + STALE + 1)).toBe(false);
+        expect(await release(HASH_1, NOW + STALE + 1)).toBe(true);
+        expect(await get(HASH_1)).toMatchObject({ status: 'prepared', updatedAt: NOW + STALE + 1 });
+        expect(await release(HASH_1, NOW + STALE + 2)).toBe(false);
+        expect(await claim(HASH_1, NOW + STALE + 2)).toBe(true);
+      });
+
+      it('across replicas, of several concurrent claims only one wins', async () => {
+        for (let round = 0; round < ROUNDS; round += 1) {
+          const hash = '0x' + round.toString(16).padStart(64, '0');
+          expect(await create(hash)).toBe(true);
+          const results = await Promise.all(Array.from({ length: CONCURRENCY }, (_, index) => claim(hash, NOW + 1, index % 2 ? replica : store)));
+          expect(results.filter(Boolean)).toHaveLength(1);
+        }
+      });
+
+      it('isSentTransaction only finds a sent one of that Safe and chain with that hash, case-insensitively', async () => {
+        await create(HASH_1);
+        expect(await store.isSentTransaction(CHAIN, SAFE, USER_OP)).toBe(false);
+        await claim(HASH_1);
+        expect(await store.isSentTransaction(CHAIN, SAFE, USER_OP)).toBe(false);
+        await complete(HASH_1, NOW + 1, USER_OP);
+        expect(await store.isSentTransaction(CHAIN, SAFE, USER_OP)).toBe(true);
+        expect(await store.isSentTransaction(CHAIN, SAFE.toLowerCase(), USER_OP.toUpperCase().replace('0X', '0x'))).toBe(true);
+        expect(await store.isSentTransaction(CHAIN, SAFE, USER_OP.toLowerCase())).toBe(true);
+        expect(await store.isSentTransaction(CHAIN + 1, SAFE, USER_OP)).toBe(false);
+        expect(await store.isSentTransaction(CHAIN, OTHER_ADDRESS, USER_OP)).toBe(false);
+        expect(await store.isSentTransaction(CHAIN, SAFE, HASH_2)).toBe(false);
+        // A released one is no longer submitting, and was never sent.
+        await create(HASH_2);
+        await claim(HASH_2);
+        await release(HASH_2, NOW + 2);
+        expect(await store.isSentTransaction(CHAIN, SAFE, HASH_2)).toBe(false);
+      });
+
+      it('creating one deletes the expired prepared ones of any Safe, but never submitting or sent ones', async () => {
+        const OLD_PREPARED = '0x' + '01'.repeat(32);
+        const OLD_SUBMITTING = '0x' + '02'.repeat(32);
+        const OLD_SENT = '0x' + '03'.repeat(32);
+        const FRESH = '0x' + '04'.repeat(32);
+        await create(OLD_PREPARED, { safe: OTHER_ADDRESS });
+        await create(OLD_SUBMITTING);
+        await claim(OLD_SUBMITTING);
+        await create(OLD_SENT);
+        await claim(OLD_SENT);
+        await complete(OLD_SENT);
+        await create(FRESH, { now: NOW + 1 });
+
+        // At `NOW + TTL` the rows last touched at `NOW` are exactly at the limit; the one at `NOW + 1` is not.
+        expect(await create(HASH_1, { now: NOW + TTL })).toBe(true);
+        expect(await get(OLD_PREPARED, OTHER_ADDRESS)).toBeNull();
+        expect(await get(OLD_SUBMITTING)).toMatchObject({ status: 'submitting' });
+        expect(await get(OLD_SENT)).toMatchObject({ status: 'sent' });
+        expect(await get(FRESH)).toMatchObject({ status: 'prepared' });
+        expect(await store.isSentTransaction(CHAIN, SAFE, USER_OP)).toBe(true);
+
+        // An expired one is gone: its hash can be prepared again from scratch.
+        expect(await create(OLD_PREPARED, { safe: OTHER_ADDRESS, now: NOW + TTL })).toBe(true);
+        expect(await get(OLD_PREPARED, OTHER_ADDRESS)).toMatchObject({ status: 'prepared', preparedAt: NOW + TTL });
+        expect(await create(FRESH, { now: NOW + TTL })).toBe(false);
+        expect(await get(FRESH)).toMatchObject({ status: 'prepared', preparedAt: NOW + 1 });
+      });
+    });
+
     describe('migrations', () => {
       it('migration 2 removes the vault second factor without losing users, sets or wallets, and closes the sessions', async () => {
         const target = await freshUrl();
@@ -655,6 +802,7 @@ export function storeContract(name: string, freshUrl: () => Promise<string>): vo
           expect(await migrated.hitRateLimit('bucket', 60_000)).toMatchObject({ hits: 1 });
           expect(await migrated.listShareAReleases(USER)).toEqual([]);
           expect(await migrated.getSponsoredDeployment(1, ADDRESS)).toBeNull();
+          expect(await migrated.getPreparedTransaction(1, ADDRESS, '0x' + '0'.repeat(64))).toBeNull();
         } finally {
           await migrated.close();
         }

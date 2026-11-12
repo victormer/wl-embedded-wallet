@@ -12,6 +12,7 @@ export default defineConfig({
       'tests/unit/passkey-recovery.test.ts',
       'tests/unit/relink.test.ts',
       'tests/unit/aa-rpc.test.ts',
+      'tests/unit/transactions.test.ts',
       'tests/unit/body-limit.test.ts',
       'tests/unit/share-a.test.ts',
       'tests/unit/s2s.test.ts',

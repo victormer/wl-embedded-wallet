@@ -34,7 +34,7 @@ export const STALE_SUBMITTING_MS = 60_000;
 const MAX_PAYMASTER_DATA_BYTES = 4096;
 const HEX_QUANTITY = /^0x[0-9a-fA-F]{1,64}$/;
 const HEX_BYTES = /^0x(?:[0-9a-fA-F]{2})*$/;
-const USER_OP_HASH = /^0x[0-9a-fA-F]{64}$/;
+export const USER_OP_HASH = /^0x[0-9a-fA-F]{64}$/;
 // `validAfter` and `validUntil` (6 bytes each) and one 65-byte ECDSA signature: a Safe with a single EOA owner.
 const SAFE_SIGNATURE = /^0x[0-9a-fA-F]{154}$/;
 
@@ -46,7 +46,13 @@ export type SponsorshipErrorCode =
   | 'DEPLOYMENT_IN_PROGRESS'
   | 'DEPLOYMENT_NOT_PREPARED'
   | 'OPERATION_NOT_ALLOWED'
-  | 'ALREADY_DEPLOYED';
+  | 'ALREADY_DEPLOYED'
+  // Transactions (`server/transactions.ts`).
+  | 'NOT_DEPLOYED'
+  | 'CALL_NOT_ALLOWED'
+  | 'INSUFFICIENT_FUNDS'
+  | 'TRANSACTION_EXPIRED'
+  | 'TRANSACTION_IN_PROGRESS';
 
 const STATUS: Record<SponsorshipErrorCode, number> = {
   FEES_TOO_HIGH: 409,
@@ -57,6 +63,11 @@ const STATUS: Record<SponsorshipErrorCode, number> = {
   DEPLOYMENT_NOT_PREPARED: 409,
   OPERATION_NOT_ALLOWED: 403,
   ALREADY_DEPLOYED: 409,
+  NOT_DEPLOYED: 409,
+  CALL_NOT_ALLOWED: 403,
+  INSUFFICIENT_FUNDS: 409,
+  TRANSACTION_EXPIRED: 409,
+  TRANSACTION_IN_PROGRESS: 409,
 };
 
 /** Never says which field or check failed. */
@@ -94,17 +105,17 @@ export interface DeploymentContext {
   bundler: { url: string; headers?: Record<string, string> };
 }
 
-function upstreamResult(outcome: RpcOutcome): unknown {
+export function upstreamResult(outcome: RpcOutcome): unknown {
   if ('error' in outcome) throw new UpstreamError(outcome.error.message);
   return outcome.result;
 }
 
-function quantity(value: unknown): bigint {
+export function quantity(value: unknown): bigint {
   if (typeof value !== 'string' || !HEX_QUANTITY.test(value)) throw new SponsorshipError('UPSTREAM_INVALID');
   return BigInt(value);
 }
 
-async function nodeQuantity(url: string, method: 'eth_gasPrice' | 'eth_maxPriorityFeePerGas'): Promise<bigint> {
+export async function nodeQuantity(url: string, method: 'eth_gasPrice' | 'eth_maxPriorityFeePerGas'): Promise<bigint> {
   const outcome = await jsonRpc(url, method, []);
   if ('error' in outcome) throw new ChainError('CHAIN_UNAVAILABLE');
   try {
@@ -176,7 +187,7 @@ function withinCap(value: bigint, cap: bigint): bigint {
 }
 
 /** ERC-7677 result: the paymaster address and data always, its gas limits when it gives them. */
-function applyPaymaster(operation: UserOperationJson, result: unknown, limits: SponsorshipLimits): UserOperationJson {
+export function applyPaymaster(operation: UserOperationJson, result: unknown, limits: SponsorshipLimits): UserOperationJson {
   if (!isRecord(result)) throw new SponsorshipError('UPSTREAM_INVALID');
   const { paymaster, paymasterData, paymasterVerificationGasLimit, paymasterPostOpGasLimit } = result;
   if (typeof paymaster !== 'string' || !isAddress(paymaster, { strict: false })) throw new SponsorshipError('UPSTREAM_INVALID');
@@ -317,7 +328,7 @@ export function matchesPrepared(candidate: Record<string, unknown>, prepared: Us
   );
 }
 
-async function signedByOwner(operation: UserOperationJson, chainId: number, owner: string, account: SmartAccountInfo): Promise<boolean> {
+export async function signedByOwner(operation: UserOperationJson, chainId: number, owner: string, account: SmartAccountInfo): Promise<boolean> {
   if (!SAFE_SIGNATURE.test(operation.signature)) return false;
   try {
     return isAddressEqual(await recoverSafeOperationSigner(operation, chainId, account), owner as `0x${string}`);
@@ -370,7 +381,7 @@ export async function submitDeployment(
   return userOpHash;
 }
 
-/** `eth_getUserOperationReceipt` is only for the hash the bundler gave for this Safe's deployment on this chain. */
+/** `eth_getUserOperationReceipt` is only for the hash the bundler gave for this Safe's deployment on this chain (see also `isSentTransaction`). */
 export async function isRecordedUserOpHash(chainId: number, safe: string, userOpHash: string): Promise<boolean> {
   const record = await getSponsoredDeployment(chainId, safe);
   return record?.status === 'sent' && typeof record.userOpHash === 'string' && record.userOpHash.toLowerCase() === userOpHash.toLowerCase();

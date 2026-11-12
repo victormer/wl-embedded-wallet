@@ -13,6 +13,7 @@ export type VaultOutcome =
       userOperation?: UserOperationJson;
       userOpHash?: `0x${string}`;
       transactionHash?: `0x${string}`;
+      chainId?: number;
     }
   | { ok: false; code: string };
 

@@ -3,6 +3,8 @@ import type { Envelope, Manifest } from '@wl-embedded-wallet/core/types';
 import type { SqlDriver, SqlExecutor } from './driver';
 import {
   SESSION_TTL_MS,
+  type PreparedTransactionRecord,
+  type PreparedTransactionStatus,
   type RelinkNonceRecord,
   type SessionRecord,
   type SetStatus,
@@ -54,6 +56,18 @@ type DeploymentRow = {
   prepared_at: number | string;
   updated_at: number | string;
 };
+type PreparedTransactionRow = {
+  chain_id: number | string;
+  safe: string;
+  user_id: string;
+  operation_hash: string;
+  status: PreparedTransactionStatus;
+  operation: string;
+  sponsored: number | string;
+  user_op_hash: string | null;
+  prepared_at: number | string;
+  updated_at: number | string;
+};
 type RelinkRow = {
   safe: string;
   owner: string;
@@ -94,6 +108,21 @@ function toDeployment(row: DeploymentRow): SponsoredDeploymentRecord {
     status: row.status,
     operation: row.operation,
     operationHash: row.operation_hash,
+    userOpHash: row.user_op_hash,
+    preparedAt: Number(row.prepared_at),
+    updatedAt: Number(row.updated_at),
+  };
+}
+
+function toPreparedTransaction(row: PreparedTransactionRow): PreparedTransactionRecord {
+  return {
+    chainId: Number(row.chain_id),
+    safe: row.safe,
+    userId: row.user_id,
+    operationHash: row.operation_hash,
+    status: row.status,
+    operation: row.operation,
+    sponsored: Number(row.sponsored) === 1,
     userOpHash: row.user_op_hash,
     preparedAt: Number(row.prepared_at),
     updatedAt: Number(row.updated_at),
@@ -473,6 +502,67 @@ export function createSqlStore(driver: SqlDriver): VaultStore {
         [now, chainId, safe.toLowerCase(), operationHash],
       );
       return rowCount === 1;
+    },
+
+    /* Prepared transactions */
+
+    async createPreparedTransaction({ chainId, safe, userId, operationHash, operation, sponsored, now, expireBefore }) {
+      // Housekeeping first: an expired `prepared` row can no longer be sent. Never touches `submitting` or `sent` rows.
+      await driver.query(`DELETE FROM prepared_transactions WHERE status = 'prepared' AND updated_at <= ?`, [expireBefore]);
+      // A single statement: an existing row with that key is left as it is, whatever its status.
+      const { rowCount } = await driver.query(
+        `INSERT INTO prepared_transactions (chain_id, safe, user_id, operation_hash, status, operation, sponsored, user_op_hash, prepared_at, updated_at)
+         VALUES (?, ?, ?, ?, 'prepared', ?, ?, NULL, ?, ?)
+         ON CONFLICT (chain_id, safe, operation_hash) DO NOTHING`,
+        [chainId, safe.toLowerCase(), userId, operationHash.toLowerCase(), operation, sponsored ? 1 : 0, now, now],
+      );
+      return rowCount === 1;
+    },
+
+    async getPreparedTransaction(chainId, safe, operationHash) {
+      const { rows } = await driver.query<PreparedTransactionRow>(
+        'SELECT * FROM prepared_transactions WHERE chain_id = ? AND safe = ? AND operation_hash = ?',
+        [chainId, safe.toLowerCase(), operationHash.toLowerCase()],
+      );
+      return rows[0] ? toPreparedTransaction(rows[0]) : null;
+    },
+
+    async claimPreparedTransaction({ chainId, safe, operationHash, now, staleSubmittingMs }) {
+      // A single statement: of several concurrent claims, only one finds the row still claimable.
+      const { rowCount } = await driver.query(
+        `UPDATE prepared_transactions SET status = 'submitting', updated_at = ?
+         WHERE chain_id = ? AND safe = ? AND operation_hash = ?
+           AND (status = 'prepared' OR (status = 'submitting' AND updated_at <= ?))`,
+        [now, chainId, safe.toLowerCase(), operationHash.toLowerCase(), now - staleSubmittingMs],
+      );
+      return rowCount === 1;
+    },
+
+    async completePreparedTransaction({ chainId, safe, operationHash, userOpHash, now }) {
+      const { rowCount } = await driver.query(
+        `UPDATE prepared_transactions SET status = 'sent', user_op_hash = ?, updated_at = ?
+         WHERE chain_id = ? AND safe = ? AND operation_hash = ? AND status = 'submitting'`,
+        [userOpHash.toLowerCase(), now, chainId, safe.toLowerCase(), operationHash.toLowerCase()],
+      );
+      return rowCount === 1;
+    },
+
+    async releasePreparedTransaction({ chainId, safe, operationHash, now }) {
+      const { rowCount } = await driver.query(
+        `UPDATE prepared_transactions SET status = 'prepared', updated_at = ?
+         WHERE chain_id = ? AND safe = ? AND operation_hash = ? AND status = 'submitting'`,
+        [now, chainId, safe.toLowerCase(), operationHash.toLowerCase()],
+      );
+      return rowCount === 1;
+    },
+
+    async isSentTransaction(chainId, safe, userOpHash) {
+      // `user_op_hash` is stored lowercase, so the index serves the lookup.
+      const { rows } = await driver.query(
+        `SELECT 1 FROM prepared_transactions WHERE chain_id = ? AND safe = ? AND user_op_hash = ? AND status = 'sent' LIMIT 1`,
+        [chainId, safe.toLowerCase(), userOpHash.toLowerCase()],
+      );
+      return rows.length > 0;
     },
   };
 }

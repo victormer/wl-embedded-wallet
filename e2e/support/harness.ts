@@ -42,7 +42,11 @@ export type VaultResult = {
   owner?: string;
   signature?: `0x${string}`;
   transactionHash?: string;
+  /** `sign` of a UserOperation: the operation that was signed. */
+  userOperation?: Record<string, unknown>;
 };
+
+export type TransactionOutcome = { status: 'sent'; userOpHash: `0x${string}`; transactionHash: `0x${string}` } | { status: 'error'; code: string };
 
 const AUTHENTICATOR = {
   protocol: 'ctap2',
@@ -167,6 +171,29 @@ export class Harness {
     const dir = process.env.E2E_SCREENSHOTS_DIR ?? resolve(RUN_DIR, 'screenshots');
     mkdirSync(dir, { recursive: true });
     await page.screenshot({ path: resolve(dir, `${name}.png`), fullPage: true });
+  }
+
+  /** Full-page shots at 390 and 1280 px wide, light and dark: `${name}-390-light.png` and so on. Restores the page after. */
+  async shotVariants(page: Page, name: string): Promise<void> {
+    const dir = process.env.E2E_SCREENSHOTS_DIR ?? resolve(RUN_DIR, 'screenshots');
+    mkdirSync(dir, { recursive: true });
+    const viewport = page.viewportSize();
+    const colorScheme = await page.evaluate(() => (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+    try {
+      for (const width of [390, 1280]) {
+        await page.setViewportSize({ width, height: 900 });
+        for (const scheme of ['light', 'dark'] as const) {
+          await page.emulateMedia({ colorScheme: scheme });
+          // From the top, so a sticky header is not captured mid-page; then let layout and the color transition settle.
+          await page.evaluate(() => window.scrollTo(0, 0));
+          await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+          await page.screenshot({ path: resolve(dir, `${name}-${width}-${scheme}.png`), fullPage: true });
+        }
+      }
+    } finally {
+      if (viewport) await page.setViewportSize(viewport);
+      await page.emulateMedia({ colorScheme });
+    }
   }
 
   /** The same tab moves to another site, like a link: it stays the popup's opener and keeps its authenticator. */
@@ -429,8 +456,16 @@ export class Harness {
     return this.P('deploy-tx').innerText();
   }
 
-  /** Signs from a demo form and waits for the server verification. */
+  /** Selects one of the wallet page's operation tabs and waits for its panel. */
+  async openTab(tab: 'message' | 'typed' | 'transaction'): Promise<void> {
+    await this.T(`op-tab-${tab}`).click();
+    await expect(this.T(`op-tab-${tab}`)).toHaveAttribute('aria-selected', 'true');
+    await this.T(`op-panel-${tab}`).waitFor({ state: 'visible' });
+  }
+
+  /** Signs from a demo form (opening its tab first) and waits for the server verification. */
   async signFromForm(submit: string, kind: string): Promise<{ valid: string | null; erc1271: string | null; signature: string }> {
+    await this.openTab(kind === 'typedData' ? 'typed' : 'message');
     await this.T(submit).click();
     await this.P('sign-approve').waitFor();
     await this.P('sign-approve').click();
@@ -440,6 +475,28 @@ export class Harness {
       valid: await this.T('sign-verified').getAttribute('data-valid'),
       erc1271: (await this.T('sign-erc1271').count()) ? await this.T('sign-erc1271').getAttribute('data-valid') : null,
       signature: await this.T('sign-signature').innerText(),
+    };
+  }
+
+  /**
+   * Sends one call from the Transaction tab: fills the fields that are given, approves it in the vault popup and waits
+   * for the app's result or error.
+   */
+  async sendFromForm(fields: { to?: string; value?: string; data?: string } = {}): Promise<TransactionOutcome> {
+    await this.openTab('transaction');
+    if (fields.to !== undefined) await this.T('tx-to').fill(fields.to);
+    if (fields.value !== undefined) await this.T('tx-value').fill(fields.value);
+    if (fields.data !== undefined) await this.T('tx-data').fill(fields.data);
+    await this.T('tx-submit').click();
+    await this.P('tx-approve').waitFor();
+    await this.P('tx-approve').click();
+    const outcome = this.T('tx-result').or(this.T('tx-error'));
+    await outcome.waitFor({ timeout: 180_000 });
+    if (await this.T('tx-error').count()) return { status: 'error', code: (await this.T('tx-error').getAttribute('data-code')) ?? '' };
+    return {
+      status: 'sent',
+      userOpHash: (await this.T('tx-userop-hash').innerText()) as `0x${string}`,
+      transactionHash: (await this.T('tx-hash').innerText()) as `0x${string}`,
     };
   }
 

@@ -7,7 +7,7 @@ This is the reference for every HTTP route the vault (`apps/vault`) serves outsi
 - Where the vault sits in the system: [ARCHITECTURE.md](ARCHITECTURE.md). What each route is trusted with: [THREAT-MODEL.md](THREAT-MODEL.md).
 - How to configure the variables this document refers to: [DEPLOYMENT.md](DEPLOYMENT.md#environment-variables).
 
-The HTML pages (`/`, `/activate`, `/deploy`, `/export`, `/recover`, `/relink`, `/sign`, `/unlock`) are not covered here. They render the popup UI and receive their public configuration in the page itself (`data-rp-id`, `data-manifest-pubkey` and `data-brand` on `#vault-config`; see `apps/vault/lib/runtime-config.ts`).
+The HTML pages (`/`, `/activate`, `/deploy`, `/export`, `/recover`, `/relink`, `/sign`, `/transaction`, `/unlock`) are not covered here. They render the popup UI and receive their public configuration in the page itself (`data-rp-id`, `data-manifest-pubkey` and `data-brand` on `#vault-config`; see `apps/vault/lib/runtime-config.ts`).
 
 ## Route index
 
@@ -21,7 +21,7 @@ The HTML pages (`/`, `/activate`, `/deploy`, `/export`, `/recover`, `/relink`, `
 | `GET` | [`/api/shares/a`](#get-apisharesa) | Session | Release share A in plaintext |
 | `POST` | [`/api/shares/exported`](#post-apisharesexported) | Session | Record that the user exported the seed |
 | `GET` | [`/api/aa/status`](#get-apiaastatus) | Session | Status of the user's Safe on the session's chain |
-| `POST` | [`/api/aa/rpc`](#post-apiaarpc) | Session | Server-built sponsored deployment: prepare, send, receipt |
+| `POST` | [`/api/aa/rpc`](#post-apiaarpc) | Session | Server-built deployment and transactions: prepare, send, receipt |
 | `POST` | [`/api/relink/nonce`](#post-apirelinknonce) | Session | Start moving an existing wallet to this account |
 | `POST` | [`/api/relink`](#post-apirelink) | Session + owner signature | Move the wallet to this account |
 | `POST` | [`/api/recovery/passkey/challenge`](#post-apirecoverypasskeychallenge) | `Origin` only | Challenge for kit-free recovery |
@@ -132,6 +132,7 @@ Cache-Control: no-store
 | Relink nonce | `relink_nonces` | 5 minutes, bound to the new `sub` | Expired rows when a nonce is created; deleted when used by `POST /api/relink` |
 | Rate-limit counter | `rate_limits` | Until its window ends | Expired rows, at most once a minute per process and 1000 at a time, when a request is counted |
 | Sponsored deployment | `sponsored_deployments` | One row per Safe and chain: `prepared`, `submitting` (stale after 60 s), `sent` (blocks a new deployment for `AA_DEPLOYMENT_RETRY_SECONDS`) | Never; a new prepare replaces the row when allowed |
+| Prepared transaction | `prepared_transactions` | One row per chain, Safe and operation hash: `prepared` (sendable for 10 minutes, `TRANSACTION_TTL_MS`), `submitting` (stale after 60 s), `sent` (keeps its `userOpHash` for receipts) | `prepared` rows past the TTL, of any Safe, when a transaction is prepared; `sent` rows never |
 | Share A release | `share_a_releases` | Permanent audit trail | Never |
 | Relink | `wallet_relinks` | Permanent audit trail | Never |
 
@@ -425,6 +426,7 @@ Status of the user's Safe on the session's chain, computed by the server against
   "nativeCurrency": "ETH",
   "rpcHost": "rpc.example.com",
   "sponsored": true,
+  "transactionsSponsored": false,
   "bundler": true,
   "deployed": false,
   "deployable": true,
@@ -437,7 +439,8 @@ Status of the user's Safe on the session's chain, computed by the server against
 | `chainName` | `AA_CHAINS[chainId].name`, else a built-in name for chains 1, 10, 137, 8453, 42161, 80002, 84532 and 11155111, else `"Unnamed network"`. |
 | `nativeCurrency` | Symbol of the chain's native currency: `AA_CHAINS[chainId].nativeCurrency`, else the built-in symbol of those chains (`POL` on 137 and 80002, `ETH` on the others), else `"ETH"`. Display only. |
 | `rpcHost` | Host (and port) of the RPC URL in use. |
-| `sponsored` | `AA_CHAINS[chainId].paymasterUrl` is set. |
+| `sponsored` | `AA_CHAINS[chainId].paymasterUrl` is set: the deployment is sponsored. |
+| `transactionsSponsored` | `paymasterUrl` is set **and** `AA_CHAINS[chainId].sponsorTransactions` is `true` (`transactionsSponsored` in `server/chains.ts`): transactions from the deployed Safe are sponsored too. Otherwise the Safe pays their fee. |
 | `bundler` | `AA_CHAINS[chainId].bundlerUrl` is set. |
 | `deployed` | The Safe address has code. |
 | `deployable` | Not deployed, every required contract (factory, singleton, Safe 4337 module, module setup, EntryPoint) has code, simulating the factory call (`eth_call`) returns exactly the expected Safe address, and a bundler is configured. If the contracts are missing or the factory would return another address, the route fails with `CHAIN_NOT_SUPPORTED` instead. |
@@ -458,7 +461,7 @@ Status of the user's Safe on the session's chain, computed by the server against
 
 ### `POST /api/aa/rpc`
 
-A restricted JSON-RPC proxy to the bundler, the paymaster and the node, so that their URLs and API keys never reach the browser. It is **not a relay**: the server builds the deployment of the session user's own Safe on the session's chain, and then forwards only that exact operation, signed by its owner, once. Gas, fees and paymaster fields never come from the browser (`server/sponsorship.ts`). The vault's deployment client is `lib/aa-client.ts`.
+A restricted JSON-RPC proxy to the bundler, the paymaster and the node, so that their URLs and API keys never reach the browser. It is **not a relay**: the server builds the deployment of the session user's own Safe on the session's chain (`server/sponsorship.ts`), or one call from that Safe once deployed (`server/transactions.ts`), and then forwards only that exact operation, signed by its owner, once. Gas, fees, nonce and paymaster fields never come from the browser. The vault's client for both flows is `lib/aa-client.ts`.
 
 **Auth:** session.
 
@@ -466,7 +469,7 @@ A restricted JSON-RPC proxy to the bundler, the paymaster and the node, so that 
 
 | Field | Type | Meaning |
 |---|---|---|
-| `method` | string | One of the three methods below. |
+| `method` | string | One of the four methods below. |
 | `params` | array | Method parameters, with exactly the count listed. |
 
 **Checks before any method**, in order: `Origin`, session, the `aa` rate limit (per IP and per `sub`, shared with `/api/aa/status`), the body, a known method, a chain in the session (`CHAIN_NOT_SUPPORTED`), a `bundlerUrl` for it (`CHAIN_NOT_SUPPORTED`), and an active set (`NO_WALLET`).
@@ -476,8 +479,9 @@ A restricted JSON-RPC proxy to the bundler, the paymaster and the node, so that 
 | Method | `params` | What it does |
 |---|---|---|
 | `vault_prepareDeployment` | `[]` | Builds, records and returns the unsigned deployment. Not forwarded as such. |
-| `eth_sendUserOperation` | `[operation, entryPoint]` | Forwards the prepared deployment with the owner's signature to the bundler. |
-| `eth_getUserOperationReceipt` | `[userOpHash]` | Forwards to the bundler, only for the hash recorded for this Safe and chain. |
+| `vault_prepareTransaction` | `[{ to, value, data? }]` | Builds, records and returns the unsigned operation for one call from the deployed Safe. Not forwarded as such. |
+| `eth_sendUserOperation` | `[operation, entryPoint]` | Forwards the prepared deployment (with `factory`) or the prepared transaction (without `factory`) with the owner's signature to the bundler. |
+| `eth_getUserOperationReceipt` | `[userOpHash]` | Forwards to the bundler, only for a hash recorded for this Safe and chain (a deployment, or a sent transaction). |
 
 Any other method, including `eth_estimateUserOperationGas`, `eth_gasPrice`, `eth_maxPriorityFeePerGas`, `pm_getPaymasterStubData` and `pm_getPaymasterData`: `403 METHOD_NOT_ALLOWED`. A different number of `params`: `400 INVALID_BODY`.
 
@@ -497,20 +501,51 @@ Without a `paymasterUrl` the same steps run without the paymaster calls and fiel
 
 Response `200`: `{ "result": <UserOperationJson> }`, unsigned (`signature: "0x"`), with decimal quantities.
 
+**`vault_prepareTransaction`** (`server/transactions.ts`)
+
+`params[0]` is the call, validated with `parseVaultCall` (`packages/core/src/sign-request.ts`): only the keys `to`, `value` and `data`; `to` an address; `value` the amount in wei as a decimal string within uint256; `data`, if present, even-length hex of at most 128000 characters (`INVALID_BODY` otherwise). Then:
+
+1. The `transaction` rate limit (per IP and per `sub`), on top of `aa`: each prepared transaction may be sponsored and costs paymaster and bundler calls.
+2. The RPC's `eth_chainId` (`CHAIN_MISMATCH`).
+3. A call to the Safe itself with non-empty `data` is refused (`403 CALL_NOT_ALLOWED`): it could change the Safe's owners, modules or guard. A value-only transfer to the Safe itself is allowed.
+4. `eth_getCode` for the Safe: no code is `409 NOT_DEPLOYED`.
+5. In parallel: `eth_gasPrice`, `eth_maxPriorityFeePerGas`, the bundler's `pimlico_getUserOperationGasPrice` quote, the Safe's `eth_getBalance` and its nonce from the EntryPoint (`getNonce(safe, 0)`, through `eth_call`). A balance below `value` is `409 INSUFFICIENT_FUNDS`, checked before any paymaster or bundler call.
+6. Fees exactly as for a deployment (step 3 above, with the same caps). The operation (`buildTransactionOperation`): `callData` is the Safe 4337 module's `executeUserOpWithErrorString(to, value, data, 0)`, operation `0` being a CALL. A delegatecall or a batch cannot be produced.
+7. Only when the chain has a `paymasterUrl` and `"sponsorTransactions": true`: `pm_getPaymasterStubData`, with the same parameters and context as the deployment.
+8. `eth_estimateUserOperationGas`, with the 20 % margin and the same caps as the deployment (`GAS_LIMIT_EXCEEDED`).
+9. Sponsored: `pm_getPaymasterData`, and both paymaster gas limits must be known (`UPSTREAM_INVALID`). Not sponsored: the balance must cover `value` plus the prefund, `(callGasLimit + verificationGasLimit + preVerificationGas) × maxFeePerGas` (`409 INSUFFICIENT_FUNDS`).
+10. The operation, the call and whether it is sponsored are stored as `prepared` in `prepared_transactions`, keyed by chain, Safe and operation hash (`userOperationHash`, which excludes the signature). Just before, `prepared` rows of any Safe older than 10 minutes are deleted. If the same operation was already prepared (same nonce, fees and gas), it is returned again while still `prepared`; once `submitting` or `sent` it is `409 TRANSACTION_IN_PROGRESS`.
+
+Response `200`: `{ "result": <UserOperationJson> }`, unsigned (`signature: "0x"`, `factory: null`), with decimal quantities.
+
 **`eth_sendUserOperation`**
 
 1. `params[0]` is an object and `params[1]` equals the manifest's `smartAccount.entryPoint`, case-insensitively (`INVALID_BODY`).
-2. `isDeploymentOperation(operation, owner, smartAccount)` (`OPERATION_NOT_ALLOWED`).
-3. A prepared row exists for this Safe and chain (`DEPLOYMENT_NOT_PREPARED`).
-4. Every field except `signature` equals the prepared operation: quantities in decimal or hex, addresses and bytes in any case, a field the prepared operation lacks must be missing or `null`, and any other key is refused. A mismatch is `ALREADY_SPONSORED` if the row is `sent`, `OPERATION_NOT_ALLOWED` otherwise.
-5. `signature` is a 77-byte Safe signature (`validAfter`, `validUntil`, one 65-byte ECDSA signature) that recovers to the owner (`OPERATION_NOT_ALLOWED`).
-6. If the row is already `sent`, the stored `userOpHash` is returned without forwarding anything.
-7. A fresh `chainStatus` (`ALREADY_DEPLOYED`), then an atomic claim of the row (`prepared` to `submitting`). A request that loses the claim gets the winner's hash if it has finished, `DEPLOYMENT_IN_PROGRESS` otherwise.
-8. The **stored** operation, with only the request's signature, is forwarded. A 32-byte hash marks the row `sent` and is returned. An upstream error (`502 UPSTREAM_ERROR`), a transport failure (`CHAIN_UNAVAILABLE`) or a malformed hash (`502 UPSTREAM_INVALID`) puts the row back to `prepared`, so the same signed operation can be sent again.
+2. If `factory` is missing or `null`, the operation can only be a transaction: see **Transactions** below. Otherwise it continues as a deployment.
+3. `isDeploymentOperation(operation, owner, smartAccount)` (`OPERATION_NOT_ALLOWED`).
+4. A prepared row exists for this Safe and chain (`DEPLOYMENT_NOT_PREPARED`).
+5. Every field except `signature` equals the prepared operation: quantities in decimal or hex, addresses and bytes in any case, a field the prepared operation lacks must be missing or `null`, and any other key is refused. A mismatch is `ALREADY_SPONSORED` if the row is `sent`, `OPERATION_NOT_ALLOWED` otherwise.
+6. `signature` is a 77-byte Safe signature (`validAfter`, `validUntil`, one 65-byte ECDSA signature) that recovers to the owner (`OPERATION_NOT_ALLOWED`).
+7. If the row is already `sent`, the stored `userOpHash` is returned without forwarding anything.
+8. A fresh `chainStatus` (`ALREADY_DEPLOYED`), then an atomic claim of the row (`prepared` to `submitting`). A request that loses the claim gets the winner's hash if it has finished, `DEPLOYMENT_IN_PROGRESS` otherwise.
+9. The **stored** operation, with only the request's signature, is forwarded. A 32-byte hash marks the row `sent` and is returned. An upstream error (`502 UPSTREAM_ERROR`), a transport failure (`CHAIN_UNAVAILABLE`) or a malformed hash (`502 UPSTREAM_INVALID`) puts the row back to `prepared`, so the same signed operation can be sent again.
 
 Response `200`: `{ "result": "<userOpHash>" }`.
 
-**`eth_getUserOperationReceipt`:** `params[0]` must match `^0x[0-9a-fA-F]{64}$` (`INVALID_BODY`) and equal the hash recorded as `sent` for this session's Safe and chain (`OPERATION_NOT_ALLOWED`). Response `200`: `{ "result": <bundler result> }`, `null` while pending.
+**Transactions: `eth_sendUserOperation` without `factory`** (`submitTransaction`)
+
+1. The candidate is normalized (hex or decimal quantities, empty fields missing or `null`); a malformed field is `OPERATION_NOT_ALLOWED`.
+2. Its `userOperationHash` is computed and the `prepared_transactions` row for this chain, Safe and hash is looked up. The hash covers every field except the signature, so a candidate with any field changed finds nothing (`403 OPERATION_NOT_ALLOWED`).
+3. Defensive re-checks against the record: the recorded call is still allowed, the prepared operation executes exactly that call from this Safe, and the candidate matches the prepared operation field by field, with the same rules as step 5 of the deployment (`OPERATION_NOT_ALLOWED`).
+4. The signature is a 77-byte Safe signature that recovers to the owner (`OPERATION_NOT_ALLOWED`).
+5. If the row is already `sent`, its `userOpHash` is returned without forwarding anything.
+6. Prepared 10 minutes ago or more (`TRANSACTION_TTL_MS`): `409 TRANSACTION_EXPIRED`. The fees and paymaster data may be stale; the popup returns the error, and the app requests the transaction again.
+7. An atomic claim (`prepared`, or `submitting` older than 60 seconds, to `submitting`). A request that loses it gets the winner's hash if it has finished, `409 TRANSACTION_IN_PROGRESS` otherwise.
+8. The **stored** operation, with only the request's signature, is forwarded once. A 32-byte hash marks the row `sent` and is returned. An upstream error, a transport failure or a malformed hash puts the row back to `prepared`, so the same signed operation can be sent again (within the TTL).
+
+Response `200`: `{ "result": "<userOpHash>" }`.
+
+**`eth_getUserOperationReceipt`:** `params[0]` must match `^0x[0-9a-fA-F]{64}$` (`INVALID_BODY`) and equal the hash recorded as `sent` for this session's Safe and chain, either its deployment or one of its sent transactions (`OPERATION_NOT_ALLOWED`). Response `200`: `{ "result": <bundler result> }`, `null` while pending.
 
 `bundlerHeaders` and `paymasterHeaders` from `AA_CHAINS` are added to the corresponding upstream request.
 
@@ -519,14 +554,19 @@ Response `200`: `{ "result": "<userOpHash>" }`.
 | Status | Code | When |
 |---|---|---|
 | 403 / 401 | `FORBIDDEN_ORIGIN`, `UNAUTHORIZED`, `ORIGIN_MISMATCH` | See conventions. |
-| 429 | `RATE_LIMITED` | `aa` scope, per IP and per `sub`. |
+| 429 | `RATE_LIMITED` | `aa` scope, per IP and per `sub`; for `vault_prepareTransaction`, also the `transaction` scope. |
 | 413 | `PAYLOAD_TOO_LARGE` | Body over 128 KiB. |
-| 400 | `INVALID_BODY` | `method` not a string or `params` not an array; wrong number of `params`; bad hash; operation not an object or wrong `entryPoint`. |
-| 403 | `METHOD_NOT_ALLOWED` | Not one of the three methods. |
+| 400 | `INVALID_BODY` | `method` not a string or `params` not an array; wrong number of `params`; bad hash; invalid call; operation not an object or wrong `entryPoint`. |
+| 403 | `METHOD_NOT_ALLOWED` | Not one of the four methods. |
 | 409 | `CHAIN_NOT_SUPPORTED` | No chain in the session, no bundler, no usable RPC URL, or the chain cannot produce the expected Safe address. |
 | 404 | `NO_WALLET` | No active set. |
-| 403 | `OPERATION_NOT_ALLOWED` | Not the deployment of this user's Safe, not the prepared operation, not signed by the owner, or a receipt for another hash. |
+| 403 | `OPERATION_NOT_ALLOWED` | Not the deployment of this user's Safe, not a prepared operation (any field changed), not signed by the owner, or a receipt for another hash. |
+| 403 | `CALL_NOT_ALLOWED` | `vault_prepareTransaction` for a call to the Safe itself with data. |
 | 409 | `ALREADY_DEPLOYED` | The Safe already has code. |
+| 409 | `NOT_DEPLOYED` | `vault_prepareTransaction` for a Safe without code on this chain. |
+| 409 | `INSUFFICIENT_FUNDS` | `vault_prepareTransaction`: the Safe's balance is below `value`, or, not sponsored, below `value` plus the prefund. |
+| 409 | `TRANSACTION_EXPIRED` | A transaction sent 10 minutes or more after it was prepared. |
+| 409 | `TRANSACTION_IN_PROGRESS` | Another request is submitting this transaction, or the same operation is prepared again after it was sent. |
 | 409 | `ALREADY_SPONSORED` | A deployment for this Safe was sent within `AA_DEPLOYMENT_RETRY_SECONDS`, or a different operation is sent after one was. |
 | 409 | `DEPLOYMENT_IN_PROGRESS` | Another request is submitting this Safe's deployment. |
 | 409 | `DEPLOYMENT_NOT_PREPARED` | `eth_sendUserOperation` with no prepared deployment. |
@@ -534,12 +574,16 @@ Response `200`: `{ "result": "<userOpHash>" }`.
 | 409 | `GAS_LIMIT_EXCEEDED` | An estimate or a paymaster gas limit is above its cap. |
 | 409 | `CHAIN_MISMATCH` | The RPC reports another chain. |
 | 409 | `CHAIN_UNAVAILABLE` | Transport failure, timeout, oversized or malformed node response. |
-| 502 | `UPSTREAM_ERROR` | Bundler or paymaster answered with a JSON-RPC `error`; adds the sanitized `rpcMessage`. The client maps a message containing `AA21` to "insufficient funds". |
+| 502 | `UPSTREAM_ERROR` | Bundler or paymaster answered with a JSON-RPC `error`; adds the sanitized `rpcMessage`, which the client maps to a code (below). |
 | 502 | `UPSTREAM_INVALID` | The paymaster or bundler answered with a result of the wrong shape. |
 
-The deploy flow passes `FEES_TOO_HIGH`, `GAS_LIMIT_EXCEEDED`, `ALREADY_SPONSORED`, `DEPLOYMENT_IN_PROGRESS` and `RATE_LIMITED` to the integrator as the `code` of the `deploy` action, and `CHAIN_*` codes as they are; the others become `DEPLOY_FAILED`.
+What the vault client (`lib/aa-client.ts`) passes to the integrator as the `code` of the `deploy` or `transaction` action:
 
-**Side effects:** `vault_prepareDeployment` writes or replaces the `prepared` row; `eth_sendUserOperation` moves it from `prepared` to `submitting` to `sent`, or back to `prepared` on failure. Outbound calls: a prepare runs a full `chainStatus` (up to nine node calls), two node fee calls, one bundler gas price call, the paymaster stub, the estimate and the final paymaster data; a send runs `chainStatus` and one bundler call; an idempotent resend makes none, and a prepare blocked by the row makes only the `chainStatus` calls.
+- `FEES_TOO_HIGH`, `GAS_LIMIT_EXCEEDED`, `ALREADY_SPONSORED`, `DEPLOYMENT_IN_PROGRESS`, `TRANSACTION_EXPIRED`, `TRANSACTION_IN_PROGRESS`, `RATE_LIMITED`, `INSUFFICIENT_FUNDS`, `CALL_NOT_ALLOWED` and `CHAIN_*` codes as they are; `NOT_DEPLOYED` as `WALLET_NOT_DEPLOYED`.
+- `UPSTREAM_ERROR`, by its `rpcMessage` (`upstreamErrorCode`), for both flows: `AA21` is `INSUFFICIENT_FUNDS`; `AA25` or "invalid nonce" is `NONCE_CONFLICT`; another `AA3x`, or a message mentioning the paymaster, sponsorship or a policy (for example Pimlico's "sponsorship policy ... is not active"), is `SPONSORSHIP_REJECTED`; any other `AAxx` is `DEPLOY_FAILED` or `TRANSACTION_FAILED`; for a transaction, a message mentioning a revert or execution is `CALL_REVERTED`.
+- Anything else: `DEPLOY_FAILED` or `TRANSACTION_FAILED`.
+
+**Side effects:** `vault_prepareDeployment` writes or replaces the `prepared` row; `eth_sendUserOperation` moves it from `prepared` to `submitting` to `sent`, or back to `prepared` on failure. `vault_prepareTransaction` inserts a `prepared_transactions` row (and deletes expired `prepared` ones), and `eth_sendUserOperation` moves it through the same states. Outbound calls: a prepare runs a full `chainStatus` (up to nine node calls), two node fee calls, one bundler gas price call, the paymaster stub, the estimate and the final paymaster data; a send runs `chainStatus` and one bundler call; an idempotent resend makes none, and a prepare blocked by the row makes only the `chainStatus` calls. A transaction prepare makes `eth_chainId`, `eth_getCode`, two node fee calls, `eth_getBalance`, one `eth_call` for the nonce, one bundler gas price call, the estimate and, when sponsored, the paymaster stub and final data; a transaction send makes one bundler call and no node calls.
 
 ## Relinking a wallet to another account
 
@@ -697,7 +741,7 @@ Active set, without `chainId`:
 Active set, with `chainId`:
 
 ```json
-{ "exists": true, "address": "0x...", "owner": "0x...", "chainId": 11155111, "deployed": false, "deployable": true, "sponsored": true }
+{ "exists": true, "address": "0x...", "owner": "0x...", "chainId": 11155111, "deployed": false, "deployable": true, "sponsored": true, "transactionsSponsored": false }
 ```
 
 If the chain check fails, the status is still `200`:
@@ -706,7 +750,7 @@ If the chain check fails, the status is still `200`:
 { "exists": true, "address": "0x...", "owner": "0x...", "chainId": 11155111, "deployed": null, "deployable": false, "chainError": "CHAIN_NOT_SUPPORTED | CHAIN_MISMATCH | CHAIN_UNAVAILABLE" }
 ```
 
-`address` is the Safe, the user's account. `owner` is the Shamir-protected key that controls it.
+`address` is the Safe, the user's account. `owner` is the Shamir-protected key that controls it. `sponsored` and `transactionsSponsored` mean the same as in [`GET /api/aa/status`](#get-apiaastatus).
 
 **Errors:** `401 UNAUTHORIZED` (missing, malformed or wrong bearer token, or `VAULT_SERVICE_TOKEN` unset); `400 INVALID_SUB` (`sub` does not match the pattern); `400 INVALID_CHAIN_ID` (`chainId` present and not a positive safe integer, whether or not the account exists); `429 RATE_LIMITED` (per IP, or per `sub`). The SDK's `createVaultServiceClient` throws `VaultUnavailableError` for all of them.
 
@@ -780,7 +824,12 @@ Serves the deployment brand's generated stylesheet, fonts, logo and favicon ([BR
 | `NO_WALLET` | 404 | `/api/aa/status`, `/api/aa/rpc` |
 | `METHOD_NOT_ALLOWED` | 403 | `/api/aa/rpc` |
 | `OPERATION_NOT_ALLOWED` | 403 | `/api/aa/rpc` |
+| `CALL_NOT_ALLOWED` | 403 | `/api/aa/rpc` |
 | `ALREADY_DEPLOYED` | 409 | `/api/aa/rpc` |
+| `NOT_DEPLOYED` | 409 | `/api/aa/rpc` |
+| `INSUFFICIENT_FUNDS` | 409 | `/api/aa/rpc` |
+| `TRANSACTION_EXPIRED` | 409 | `/api/aa/rpc` |
+| `TRANSACTION_IN_PROGRESS` | 409 | `/api/aa/rpc` |
 | `ALREADY_SPONSORED` | 409 | `/api/aa/rpc` |
 | `DEPLOYMENT_IN_PROGRESS` | 409 | `/api/aa/rpc` |
 | `DEPLOYMENT_NOT_PREPARED` | 409 | `/api/aa/rpc` |

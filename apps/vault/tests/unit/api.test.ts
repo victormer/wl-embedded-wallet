@@ -564,9 +564,14 @@ describe('network API and bundler/paymaster proxy', () => {
     const auth = `Bearer ${SERVICE_TOKEN}`;
     const account = (query: string) => getAccount(req(`/api/s2s/accounts/${ALICE}${query}`, { authorization: auth }), { params: Promise.resolve({ sub: ALICE }) });
     expect(await (await account('')).json()).toEqual({ exists: true, address: safe.address, owner: ADDRESS });
-    expect(await (await account(`?chainId=${CHAIN}&rpcUrl=${encodeURIComponent(node.url)}`)).json()).toMatchObject({ exists: true, chainId: CHAIN, deployed: false, deployable: true });
+    expect(await (await account(`?chainId=${CHAIN}&rpcUrl=${encodeURIComponent(node.url)}`)).json()).toMatchObject({ exists: true, chainId: CHAIN, deployed: false, deployable: true, sponsored: true, transactionsSponsored: false });
     node.state.code[safe.address.toLowerCase()] = '0x60';
-    expect(await (await account(`?chainId=${CHAIN}&rpcUrl=${encodeURIComponent(node.url)}`)).json()).toMatchObject({ deployed: true });
+    expect(await (await account(`?chainId=${CHAIN}&rpcUrl=${encodeURIComponent(node.url)}`)).json()).toMatchObject({ deployed: true, transactionsSponsored: false });
+    // Transactions are sponsored only where the chain opts in.
+    process.env.AA_CHAINS = JSON.stringify({ [CHAIN]: { bundlerUrl: bundler.url, paymasterUrl: paymaster.url, sponsorTransactions: true } });
+    expect(await (await account(`?chainId=${CHAIN}&rpcUrl=${encodeURIComponent(node.url)}`)).json()).toMatchObject({ deployed: true, sponsored: true, transactionsSponsored: true });
+    process.env.AA_CHAINS = JSON.stringify({ [CHAIN]: { bundlerUrl: bundler.url } });
+    expect(await (await account(`?chainId=${CHAIN}&rpcUrl=${encodeURIComponent(node.url)}`)).json()).toMatchObject({ sponsored: false, transactionsSponsored: false });
     expect(await (await account(`?chainId=${CHAIN}&rpcUrl=${encodeURIComponent('https://outside.test')}`)).json()).toMatchObject({ deployed: null, chainError: 'CHAIN_NOT_SUPPORTED' });
     expect((await account('?chainId=abc')).status).toBe(400);
   });

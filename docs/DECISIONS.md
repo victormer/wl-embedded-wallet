@@ -25,7 +25,7 @@ Related documents: [README.md](../README.md), [ARCHITECTURE.md](ARCHITECTURE.md)
 apps/vault                   vault.localhost:3201  Share A, encB, encC, manifest and MASTER_KEY. Reconstructs only in the browser worker.
 examples/demo                app.localhost:3200    Sample integrator app: users and sessions. Never sees shares or the seed.
 packages/core                                      @wl-embedded-wallet/core: pure crypto core (envelopes, manifest, kit, recovery code, seed backup, Safe, worker logic).
-packages/sdk                                       @wl-embedded-wallet/sdk: /client (activate(), deploy(), signMessage(), signTypedData(), signUserOperation(), unlock(), recover(), export(), relink()), /server (handoff tokens, JWKS, s2s client), /protocol
+packages/sdk                                       @wl-embedded-wallet/sdk: /client (activate(), deploy(), signMessage(), signTypedData(), signUserOperation(), sendTransaction(), unlock(), recover(), export(), relink()), /server (handoff tokens, JWKS, s2s client), /protocol
 packages/recovery-tool                             Offline tool built on the core: a single-file HTML page and a Node CLI
 ```
 
@@ -349,12 +349,15 @@ Not activated → activated but not deployed → deployed. Deployment is per net
 - **Messages and EIP-712:** these are Safe signatures. The owner signs `SafeMessage(bytes message)` over the hash, with the domain `{ chainId, verifyingContract: safe }`. They are verified with `isValidSignature(bytes32,bytes)` on the contract. `Safe4337Module` inherits the compatibility fallback handler, so it supports this: verified against the real bytecode. A signature for one network reverts on another.
 - **UserOperation:** `sender` is the Safe, it never carries a `factory`, and the EIP-712 hash of `SafeOp` is signed without submitting it. The key never leaves the worker: signing uses an external signer from `abstractionkit`.
 - **Deployment:** `factory`, `factoryData` and an empty, zero-value call to the Safe itself. The worker rejects any other operation before using the seed. It is prepared before requesting the passkey, because some browsers require the passkey prompt inside the user gesture.
+- **Transaction:** one call (`to`, `value`, `data`) from the deployed Safe, always a CALL through `executeUserOpWithErrorString`: no delegatecall and no batches. The server builds the operation; the worker (`send-transaction`) checks that it executes exactly the reviewed call from this Safe, refuses a call with data to the Safe itself (it could change owners, modules or the guard) and an undeployed Safe, and only then uses the seed. Prepared before the passkey prompt, like the deployment.
 
 ### Proxy
 
-The bundler and paymaster are contacted only from the server, with `connect-src 'self'` left intact. `POST /api/aa/rpc` requires a session and admits three methods: `vault_prepareDeployment`, `eth_sendUserOperation` and `eth_getUserOperationReceipt`.
+The bundler and paymaster are contacted only from the server, with `connect-src 'self'` left intact. `POST /api/aa/rpc` requires a session and admits four methods: `vault_prepareDeployment`, `vault_prepareTransaction`, `eth_sendUserOperation` and `eth_getUserOperationReceipt`.
 
 It is not a relay. **The server builds the deployment** of the session's own Safe, on the session's network, not yet deployed: fees from the node with the bundler's gas price quote as a floor, gas from the bundler's estimate and the paymaster fields from the paymaster, each within caps (`AA_MAX_*`, or `AA_CHAINS[chainId].limits` per chain). It records that operation and returns it unsigned. `eth_sendUserOperation` then accepts only that exact operation with the owner's signature, and forwards it once per Safe and chain; the same operation sent again gets the recorded hash back. Receipts are only for that hash. Anything else gets `OPERATION_NOT_ALLOWED` or `METHOD_NOT_ALLOWED`. The sponsorship context is set by the server. URLs never appear in logs or errors, because they may contain an API key. Calls are rate limited per IP and per `sub`.
+
+Transactions follow the same rule (`vault_prepareTransaction`, [HTTP-API.md](HTTP-API.md)): the browser chooses only the call; the server takes the nonce from the EntryPoint and builds fees, gas and, only where `AA_CHAINS[chainId].sponsorTransactions` is `true`, the paymaster fields, records the operation in `prepared_transactions` and later forwards only that operation, found by its hash and signed by the owner, once and within 10 minutes. Sponsoring arbitrary calls can drain the paymaster, so it is opt-in per chain and has its own rate-limit scope (`transaction`); see [THREAT-MODEL.md](THREAT-MODEL.md).
 
 Why the server builds it: when the browser built the operation and the server checked only `sender`, `factory`, `factoryData`, `callData` and `nonce`, a session could choose the gas limits, the fees and the paymaster fields of a sponsored operation, and so how much of the paymaster's budget it spent. Validating every field the browser sent would have meant re-deriving them all on the server anyway.
 
@@ -362,7 +365,7 @@ Paymaster via ERC-7677, called by the server: `pm_getPaymasterStubData` → esti
 
 ## Multichain
 
-Every operation that touches a chain specifies its network: `deploy`, `signMessage`, `signTypedData` and `signUserOperation` take `chain: { chainId, rpcUrl? }`. The Safe has the same address on all of them, and deployment and its status are per network.
+Every operation that touches a chain specifies its network: `deploy`, `signMessage`, `signTypedData` and `signUserOperation` take `chain: { chainId, rpcUrl? }`, and `sendTransaction` takes it in its request. The Safe has the same address on all of them, and deployment and its status are per network.
 
 ### RPC provenance
 

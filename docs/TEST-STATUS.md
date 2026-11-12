@@ -28,7 +28,8 @@ single development machine (macOS on Apple silicon, arm64), against local servic
 - Real passkeys and platform authenticators, and whether they support PRF.
 - Safari, Firefox and any mobile browser.
 - Any real or public bundler or paymaster, and any public network, testnet or L2. The sponsorship caps, their
-  defaults and the bundler gas price floor have never met a real provider.
+  defaults and the bundler gas price floor have never met a real provider, and no transaction (`sendTransaction`)
+  has been sent through one, sponsored or not.
 - A deployment on Vercel and Neon. A local build with `VERCEL=1` traced the brand and the offline tool into the
   functions, but nothing has been deployed, so the Vercel edge's `x-real-ip`, Neon's pooler and channel binding are
   unverified.
@@ -87,7 +88,7 @@ Paths in the Evidence column are relative to the repository root. "e2e" means `e
 | Safari / WebKit | Not tested | | `__Host-` cookies with `Secure` over plain HTTP may be rejected, which could require local HTTPS for manual testing; `file://` may not expose `crypto.subtle` to the offline tool |
 | Firefox | Not tested | | Same caveats as Safari |
 | Mobile browsers (iOS, Android), mobile popups and viewports | Not tested | | The CSS has a 420 px breakpoint, but no test renders it. Popup behavior of `window.open` on mobile is unverified |
-| Accessibility (screen readers, keyboard-only use) | Not tested | | Contrast is validated in code at startup; there are no automated accessibility tests |
+| Accessibility (screen readers, keyboard-only use) | Not tested | | Contrast is validated in code at startup; there are no automated accessibility tests. The demo's signing tabs follow the WAI-ARIA tab pattern, but e2e only clicks them and checks `aria-selected`; arrow-key navigation is not exercised |
 
 ## Vault isolation and web security
 
@@ -105,7 +106,7 @@ Paths in the Evidence column are relative to the repository root. "e2e" means `e
 | Share A release budgets (per session, per user) and the audit record of each release | Tested | `share-a.test.ts`; store contract (`share A releases`) | A release whose record cannot be written does not happen. Nobody is notified: see "Notifying the user" |
 | Signed `origin` claim and several apps sharing one wallet | Tested | e2e `k-multi-app` | Two demo instances on different origins |
 | Per-origin user consent the first time an app uses a wallet | Not implemented | | |
-| Vault rate limiting (handoff, share A, enrollment, recovery challenges and assertions, relink nonces and relink, AA proxy, server-to-server) | Partially | `apps/vault/tests/unit/rate-limit.test.ts`, `limits.test.ts`, `route-limits.test.ts`, `share-a.test.ts`, `s2s.test.ts`, `aa-rpc.test.ts`, `passkey-recovery.test.ts`, `relink.test.ts` (SQLite, and Postgres with `pnpm test:pg`); store contract (`rate limits`, across replicas); `vault-api.test.ts` (a `429` reaches the page and the app as `RATE_LIMITED`) | Correct counting and `429 RATE_LIMITED` with `Retry-After` only. **Not under real load and not behind a real reverse proxy.** The e2e suite sets generous `RATE_LIMITS`, because all its browsers share `127.0.0.1`, so no e2e test reaches a limit |
+| Vault rate limiting (handoff, share A, enrollment, recovery challenges and assertions, relink nonces and relink, AA proxy, prepared transactions, server-to-server) | Partially | `apps/vault/tests/unit/rate-limit.test.ts`, `limits.test.ts`, `route-limits.test.ts`, `share-a.test.ts`, `s2s.test.ts`, `aa-rpc.test.ts`, `transactions.test.ts` (the `transaction` scope), `passkey-recovery.test.ts`, `relink.test.ts` (SQLite, and Postgres with `pnpm test:pg`); store contract (`rate limits`, across replicas); `vault-api.test.ts` (a `429` reaches the page and the app as `RATE_LIMITED`) | Correct counting and `429 RATE_LIMITED` with `Retry-After` only. **Not under real load and not behind a real reverse proxy.** The e2e suite sets generous `RATE_LIMITS`, because all its browsers share `127.0.0.1`, so no e2e test reaches a limit |
 | Client IP: socket peer from the `peer-address.cjs` preload, `TRUSTED_PROXIES` and `X-Forwarded-For` | Partially | `peer-address.test.ts`, `rate-limit.test.ts` ("clientIp"), `limits.test.ts` ("trustedProxies"); e2e and image start the vault with the preload | `TRUSTED_PROXIES` and `X-Forwarded-For` are exercised in unit tests only, never with Caddy or another real proxy. Through Docker's published port the peer may be the bridge gateway; not tested. The refusal to start in production without the preload is unit-tested only |
 | Client IP on Vercel (`CLIENT_IP_SOURCE=vercel`, `x-real-ip`) | Partially | `rate-limit.test.ts` ("clientIp on Vercel"), `limits.test.ts` ("clientIpSource"), `peer-address.test.ts`, `config.test.ts` | Unit tests with `VERCEL` and `VERCEL_REGION` stubbed: only `x-real-ip` is read, forged `X-Forwarded-For` shares the budget, and `vercel` outside Vercel trusts nothing. That the Vercel edge overwrites `x-real-ip` is Vercel's documented behavior, not verified here |
 | JSON body cap (128 KiB, `413 PAYLOAD_TOO_LARGE`) | Tested | `body-limit.test.ts`; `proxy.test.ts` (the middleware does not run on `/api/`) | Includes a `POST /api/shares` registration with every field at its validator limit |
@@ -127,7 +128,11 @@ Paths in the Evidence column are relative to the repository root. "e2e" means `e
 | Deployment without a paymaster from the browser (`INSUFFICIENT_FUNDS` path) | Partially | `aa-rpc.test.ts` ("without a paymaster the same server-built path applies, within the same caps") | A self-funded UserOperation is accepted at contract level in `aa-contracts.test.ts`, and the server path is unit-tested, but the vault UI and worker path without a paymaster is not exercised |
 | ERC-1271 message and EIP-712 signatures as the Safe | Tested | `aa-contracts.test.ts`; `examples/demo/tests/unit/api.test.ts`; e2e `b-deploy-sign`, `m-bc-operational` | A signature valid on one chain fails on another |
 | UserOperation signing | Partially | `apps/vault/tests/unit/sign.test.ts`; `aa-contracts.test.ts` (real `handleOps`) | In e2e and in B+C mode the UserOperation is only checked by recovering the owner, without `handleOps` |
-| Sending arbitrary UserOperations (transfers, calls) | Not implemented | `POST /api/aa/rpc` proxy policy | The proxy only forwards the deployment it prepared for the session's Safe; other operations get `OPERATION_NOT_ALLOWED`, and the bundler and paymaster methods `METHOD_NOT_ALLOWED` (unit-tested in `aa-rpc.test.ts` and `api.test.ts`) |
+| Transactions from the deployed Safe (`sendTransaction`): one CALL built by the server (`vault_prepareTransaction`), reviewed in the `/transaction` popup, signed by the worker's `send-transaction` op, sent and waited for | Tested | `apps/vault/tests/integration/aa-contracts.test.ts` (through the vault routes: sponsored 0-value call, unsponsored value transfer paid by the Safe, `INSUFFICIENT_FUNDS`, a reverting call included with `success: false`, `NOT_DEPLOYED`); `apps/vault/tests/unit/transactions.test.ts`, `sign.test.ts` (`send-transaction`); `packages/core/tests/transaction.test.ts`; `packages/sdk/tests/client.test.ts`; e2e `q-transaction` | **Only against the local test bundler and paymaster** and in-process fakes. The local bundler returns fixed gas limits, so the 20 % margin and the caps are exercised with fakes only. `TRANSACTION_TIMEOUT` (no receipt within 3 minutes) is not exercised end to end |
+| The send must equal the prepared transaction; idempotent resend; single flight (`TRANSACTION_IN_PROGRESS`); `TRANSACTION_EXPIRED` after 10 minutes; release after a bundler failure; receipts only for this Safe's sent hashes; `CALL_NOT_ALLOWED` for a self-call with data | Tested | `transactions.test.ts`; store contract (`prepared transactions`, across replicas); e2e `q-transaction` (self-call) | Resending after a transport timeout is only exercised against fakes |
+| Transaction sponsorship (`sponsorTransactions`), its validation and `transactionsSponsored` in the status and s2s answers | Tested | `transactions.test.ts`, `chains.test.ts`, `config.test.ts`, `api.test.ts`; `aa-contracts.test.ts`; e2e `q-transaction` (sponsored on 31001, unsponsored on 31002) | A real paymaster's sponsorship policy (Pimlico spend caps, inactive policies) is untested: the `SPONSORSHIP_REJECTED` mapping is unit-tested on error messages only |
+| Readable bundler and paymaster errors (`upstreamErrorCode`: `INSUFFICIENT_FUNDS`, `NONCE_CONFLICT`, `SPONSORSHIP_REJECTED`, `CALL_REVERTED`, `TRANSACTION_FAILED` or `DEPLOY_FAILED`) | Partially | `transactions.test.ts` ("upstreamErrorCode") | Against sample messages written for the test. The error texts of real providers are unverified |
+| Batches, delegatecall and arbitrary UserOperations | Not implemented | `POST /api/aa/rpc` proxy policy | The proxy only forwards the deployment or the single call it prepared for the session's Safe; other operations get `OPERATION_NOT_ALLOWED`, and the bundler and paymaster methods `METHOD_NOT_ALLOWED` (unit-tested in `aa-rpc.test.ts`, `transactions.test.ts` and `api.test.ts`) |
 | Missing factory on a chain | Tested | `aa-contracts.test.ts`; e2e `c-multichain` | |
 | Factory that returns a different address | Partially | `chains.test.ts` | Only with a fake RPC |
 | Chains with different CREATE2 derivation (for example zkSync) | Not tested | | Rejected by design (the factory must return exactly the predicted address); no such chain was tried |
@@ -154,8 +159,8 @@ Paths in the Evidence column are relative to the repository root. "e2e" means `e
 | Area | Status | Evidence | Notes |
 |---|---|---|---|
 | SQLite store (development and tests only) | Tested | `apps/vault/tests/unit/store.sqlite.test.ts` | Uses `node:sqlite`, which is experimental in Node 22 |
-| Postgres store, migrations 001 to 006, advisory lock, parallel startup | Tested | `apps/vault/tests/pg/store.pg.test.ts` with the store contract (`pnpm test:pg`) | Postgres 17.6 in Docker, no SSL |
-| Concurrency between replicas | Partially | Store contract with two connections to one database (including rate limit buckets, capped WebAuthn challenges and sponsored deployment claims); image `image.spec.ts` (two vault containers) | Correctness under races only; no load or soak testing |
+| Postgres store, migrations 001 to 007, advisory lock, parallel startup | Tested | `apps/vault/tests/pg/store.pg.test.ts` with the store contract (`pnpm test:pg`) | Postgres 17.6 in Docker, no SSL |
+| Concurrency between replicas | Partially | Store contract with two connections to one database (including rate limit buckets, capped WebAuthn challenges, sponsored deployment claims and prepared transaction claims); image `image.spec.ts` (two vault containers) | Correctness under races only; no load or soak testing |
 | Load, throughput, latency, connection pool sizing | Not tested | | |
 | Postgres with SSL (`sslmode`), managed Postgres (Neon), behind a connection pooler | Not tested | `postgres-url.test.ts`, `examples/demo/tests/unit/db.test.ts` (URL normalization only) | The `sslmode` and `channel_binding` rewriting is unit-tested; no connection over SSL or through a pooler has been made |
 | Demo database on Postgres | Tested | `examples/demo/tests/unit/db.test.ts`, `api.test.ts`, `rate-limit.test.ts` with `pnpm test:pg` | Postgres 17.6 in Docker, no SSL. The e2e suite runs the demo on SQLite only |
@@ -188,7 +193,7 @@ Paths in the Evidence column are relative to the repository root. "e2e" means `e
 | SDK result validation (`PROTOCOL_ERROR`), `timeoutMs` (`TIMEOUT`), `INTERNAL` when the popup cannot be opened or posted to | Tested | `packages/sdk/tests/client.test.ts` ("result validation", "timeoutMs") | Against a simulated popup, not a real browser window |
 | Terminal errors of `/relink` and `/export` reach the app instead of waiting for the popup to close | Tested | e2e `o-relink`, `f-export` ("without a wallet, the app receives NO_WALLET instead of waiting for the popup to close") | |
 | Documentation examples compile into working tokens | Tested | `packages/sdk/tests/docs-example.test.ts`; image (`curl` from `docs/INTEGRATION.md`) | |
-| Demo app (registration, TOTP and its replay, `DEMO_CHAINS` validation, JWKS, signature verification, database, rate limits) | Tested | `examples/demo/tests/unit/api.test.ts` ("second factor replay", "chain configuration"), `chains.test.ts`, `db.test.ts`, `rate-limit.test.ts`, `messages.test.ts`; e2e | The demo is an example, not a hardened product. TOTP guessing during the intermediate session is bounded by the per-user `totp` limit (10 a minute by default) and a code is accepted only once |
+| Demo app (registration, TOTP and its replay, `DEMO_CHAINS` validation, JWKS, signature verification, the Transaction tab's form, database, rate limits) | Tested | `examples/demo/tests/unit/api.test.ts` ("second factor replay", "chain configuration"), `chains.test.ts`, `db.test.ts`, `rate-limit.test.ts`, `messages.test.ts`, `transaction.test.ts`; e2e | The demo is an example, not a hardened product. TOTP guessing during the intermediate session is bounded by the per-user `totp` limit (10 a minute by default) and a code is accepted only once |
 | Integration with a real third-party identity provider or backend | Not tested | | Only the demo backend issues tokens |
 
 ## Dependencies
@@ -208,14 +213,16 @@ None of these has been done. They are listed so that whoever picks them up can r
   whether the PRF output arrives at `create` or only at `get` (the vault exposes this as `data-source` on the
   `prf-source` element during enrollment).
 - The full flow in Safari and Firefox, including the offline tool opened from `file://`.
-- Deployment and signing on a public testnet with a real bundler and paymaster, including an L2, to check the
-  sponsorship caps and their defaults.
+- Deployment, signing and sending transactions (sponsored and paid by the Safe) on a public testnet with a real
+  bundler and paymaster, including an L2, to check the sponsorship caps and their defaults, the error mapping and a
+  Pimlico sponsorship policy's limits.
 - The image built and run on `linux/amd64`.
 - An HTTPS deployment on a real domain with the `tls` profile, including HSTS and the rate limits behind Caddy with
   `TRUSTED_PROXIES` set, and under load.
 - Postgres over SSL and behind a pooler, and a backup restore.
 - The Vercel and Neon deployment, with the [smoke tests](DEPLOYMENT.md#smoke-tests) in DEPLOYMENT.md, including a
-  sponsored deployment through Pimlico on each of the three [public testnets](DEPLOYMENT.md#public-testnets).
+  sponsored deployment and a sponsored transaction through Pimlico on each of the three
+  [public testnets](DEPLOYMENT.md#public-testnets).
 
 ## Related documents
 

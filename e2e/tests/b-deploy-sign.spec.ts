@@ -3,6 +3,15 @@ import { APP, CHAIN_A, VAULT } from '../support/env.ts';
 import { expect, test } from '../support/harness.ts';
 
 const FORM_MESSAGE = 'I authorize this operation.';
+const USER_OPERATION = {
+  calls: [{ to: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8', value: '1000000000000000' }],
+  nonce: '0',
+  callGasLimit: '100000',
+  verificationGasLimit: '200000',
+  preVerificationGas: '60000',
+  maxFeePerGas: '30000000000',
+  maxPriorityFeePerGas: '1500000000',
+};
 
 test.describe('B · deployment and signing', () => {
   test('signing blocked until deployed, deployment with paymaster and verified signatures', async ({ h }) => {
@@ -10,9 +19,14 @@ test.describe('B · deployment and signing', () => {
     await h.selectChain(CHAIN_A, 'false');
 
     // Blocked in the UI.
+    await expect(h.T('op-tab-message')).toHaveAttribute('aria-selected', 'true');
     await expect(h.T('sign-blocked')).toBeVisible();
     await expect(h.T('sign-message-input')).toHaveCount(0);
-    await expect(h.T('sign-userop-submit')).toHaveCount(0);
+    await expect(h.T('tx-submit')).toHaveCount(0);
+    await h.openTab('transaction');
+    await expect(h.T('tx-not-deployed')).toBeVisible();
+    await expect(h.T('tx-submit')).toHaveCount(0);
+    await h.openTab('message');
 
     // And actually blocked in the vault, bypassing the UI.
     const blocked = await h.direct('sign', { kind: 'sign', chain: { chainId: CHAIN_A }, request: { kind: 'message', message: 'not deployed' } }, CHAIN_A);
@@ -75,22 +89,40 @@ test.describe('B · deployment and signing', () => {
     expect(message).toMatchObject({ valid: 'true', erc1271: 'true' });
     expect(await erc1271(CHAIN_A, account.safe, FORM_MESSAGE, message.signature as `0x${string}`)).toBe(ERC1271_MAGIC);
     expect(await erc1271(CHAIN_A, account.safe, 'another message', message.signature as `0x${string}`)).not.toBe(ERC1271_MAGIC);
+    await h.shotVariants(h.app, 'demo-tabs');
 
     const typed = await h.signFromForm('sign-typed-submit', 'typedData');
     expect(typed).toMatchObject({ valid: 'true', erc1271: 'true' });
+    await expect(h.T('chain-notice')).toBeVisible();
+    await h.shot(h.app, 'demo-signature-verified');
 
-    await h.T('sign-userop-submit').click();
-    await h.P('sign-approve').waitFor();
+    // Each tab keeps its own result: the message's is back when its tab is.
+    await h.openTab('message');
+    await expect(h.T('sign-result')).toHaveAttribute('data-kind', 'message');
+    await expect(h.T('sign-signature')).toHaveText(message.signature);
+
+    // A bare UserOperation is signed through the SDK protocol (the demo form now sends transactions instead).
+    const request = { kind: 'userOperation', userOperation: USER_OPERATION };
+    const signing = h.direct('sign', { kind: 'sign', chain: { chainId: CHAIN_A }, request }, CHAIN_A);
+    await h.P('sign-userop-to').waitFor();
+    await expect(h.P('sign-approve')).toBeVisible();
     await expect(h.P('sign-address')).toHaveText(account.safe);
     await expect(h.P('review-chain')).toContainText(String(CHAIN_A));
     await expect(h.P('sign-userop-to')).toHaveCount(1);
     await expect(h.P('sign-authority')).toContainText('Safe');
     await h.shot(h.popup, 'sign-review');
     await h.P('sign-approve').click();
-    await expect(h.T('sign-result')).toHaveAttribute('data-kind', 'userOperation');
-    await expect(h.T('sign-verified')).toHaveAttribute('data-valid', 'true');
-    await expect(h.T('chain-notice')).toBeVisible();
-    await h.shot(h.app, 'demo-signature-verified');
+    const signedOperation = await signing;
+    expect(signedOperation).toMatchObject({ ok: true, address: account.safe, signature: expect.stringMatching(/^0x[0-9a-f]+$/i) });
+    expect(signedOperation.userOperation).toBeDefined();
+    const verifiedOperation = await h.app.evaluate(
+      async (body) => {
+        const response = await fetch('/api/signatures/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        return response.json();
+      },
+      { chainId: CHAIN_A, request, signature: signedOperation.signature, userOperation: signedOperation.userOperation },
+    );
+    expect(verifiedOperation.valid).toBe(true);
 
     // A tampered signature is not accepted.
     const altered = await h.app.evaluate(async ({ chainId, signature, message }) => {
@@ -115,6 +147,7 @@ test.describe('B · deployment and signing', () => {
     await h.selectChain(CHAIN_A, 'false');
     await h.deploy();
 
+    await h.openTab('message');
     await h.T('sign-message-submit').click();
     await h.P('sign-reject').click();
     await expect(h.T('sign-error')).toHaveAttribute('data-code', 'USER_REJECTED');

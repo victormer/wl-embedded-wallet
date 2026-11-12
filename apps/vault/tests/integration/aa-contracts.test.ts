@@ -87,7 +87,11 @@ describe('real Safe and EntryPoint contracts', () => {
     ]);
     [a, b, noFactory] = stack.chains as [Chain, Chain, Chain];
     process.env.RPC_ALLOWED_HOSTS = '127.0.0.1';
-    process.env.AA_CHAINS = JSON.stringify({ [CHAIN_A]: { bundlerUrl: a.bundlerUrl, paymasterUrl: a.paymasterUrl }, [CHAIN_B]: { bundlerUrl: b.bundlerUrl, paymasterUrl: b.paymasterUrl } });
+    // Transactions are sponsored on B only: A has a paymaster for deployments, but its Safe pays for its own calls.
+    process.env.AA_CHAINS = JSON.stringify({
+      [CHAIN_A]: { bundlerUrl: a.bundlerUrl, paymasterUrl: a.paymasterUrl },
+      [CHAIN_B]: { bundlerUrl: b.bundlerUrl, paymasterUrl: b.paymasterUrl, sponsorTransactions: true },
+    });
   }, 60_000);
 
   afterAll(() => stack?.stop());
@@ -125,8 +129,8 @@ describe('real Safe and EntryPoint contracts', () => {
 
   it('deploys with the paymaster on A, at the predicted address, without touching B', async () => {
     const { receipt } = await deploy(a, key);
-    expect(receipt.success).toBe(true);
-    expect(receipt.paymaster.toLowerCase()).toBe(a.paymasterAddress.toLowerCase());
+    expect(receipt!.success).toBe(true);
+    expect(receipt!.paymaster.toLowerCase()).toBe(a.paymasterAddress.toLowerCase());
     expect((await getCode(a, safe)).length).toBeGreaterThan(2);
     expect(await getCode(b, safe)).toMatch(/^0x$|^$/);
   });
@@ -150,8 +154,8 @@ describe('real Safe and EntryPoint contracts', () => {
     expect(userOpHash).toBe(userOperationHash(prepared, b.chainId, params));
     expect(await getSponsoredDeployment(b.chainId, safe)).toMatchObject({ status: 'sent', userOpHash });
     const { result: receipt } = (await call('eth_getUserOperationReceipt', [userOpHash])) as { result: { success: boolean; paymaster: string } };
-    expect(receipt.success).toBe(true);
-    expect(receipt.paymaster.toLowerCase()).toBe(b.paymasterAddress.toLowerCase());
+    expect(receipt!.success).toBe(true);
+    expect(receipt!.paymaster.toLowerCase()).toBe(b.paymasterAddress.toLowerCase());
     // Sent again: the same hash, without reaching the bundler a second time.
     const sends = b.requests.filter((request) => request.method === 'eth_sendUserOperation').length;
     expect(await call('eth_sendUserOperation', [toRpcUserOperation(signed), params.entryPoint])).toEqual({ result: userOpHash });
@@ -192,6 +196,85 @@ describe('real Safe and EntryPoint contracts', () => {
     const signature = await signSafeOperation(paymasterless, a.chainId, params, signer);
     const hash = await rpc<string>(a.bundlerUrl, 'eth_sendUserOperation', [toRpcUserOperation({ ...paymasterless, signature }), params.entryPoint]);
     const receipt = await rpc<{ success: boolean }>(a.bundlerUrl, 'eth_getUserOperationReceipt', [hash]);
-    expect(receipt.success).toBe(true);
+    expect(receipt!.success).toBe(true);
+  });
+
+  /** A session for `owner`'s wallet on `chain`, and a JSON-RPC call through the vault proxy. */
+  async function vaultRpc(chain: Chain) {
+    const cookie = await openSession('alice');
+    await activeWallet(cookie, 'alice', owner);
+    await setSessionChain(cookie, { chainId: chain.chainId, rpcUrl: chain.rpcUrl });
+    return async (method: string, params: unknown[]) => (await postAaRpc(req('/api/aa/rpc', { cookie, body: { method, params } }))).json();
+  }
+
+  async function sendThroughVault(chain: Chain, transaction: { to: string; value: string; data?: string }) {
+    const call = await vaultRpc(chain);
+    const { signer } = signerFor(key);
+    const params = smartAccountFor(owner);
+    const prepared = (await call('vault_prepareTransaction', [transaction])) as { result?: UserOperationJson; error?: string };
+    if (!prepared.result) return { prepared, call };
+    const operation = prepared.result;
+    const signed = { ...operation, signature: await signSafeOperation(operation, chain.chainId, params, signer) };
+    const sent = (await call('eth_sendUserOperation', [toRpcUserOperation(signed), params.entryPoint])) as { result: string };
+    const receipt = (await call('eth_getUserOperationReceipt', [sent.result])) as { result: { success: boolean; paymaster: string; receipt: { transactionHash: string } } };
+    return { prepared, operation, signed, userOpHash: sent.result, receipt: receipt.result, call, params };
+  }
+
+  const balanceOf = async (chain: Chain, address: string) => BigInt(await rpc<string>(chain.rpcUrl, 'eth_getBalance', [address, 'latest']));
+
+  it('sends a sponsored 0-value call from the deployed Safe through the vault routes, once', async () => {
+    const recipient = privateKeyToAccount(generatePrivateKey()).address;
+    const before = await balanceOf(b, safe);
+    const { operation, signed, userOpHash, receipt, call, params } = await sendThroughVault(b, { to: recipient, value: '0' });
+    expect(operation).toMatchObject({ sender: safe, factory: null, paymaster: getAddress(b.paymasterAddress), signature: '0x' });
+    expect(BigInt(operation!.nonce)).toBeGreaterThan(0n);
+    expect(userOpHash).toBe(userOperationHash(operation!, b.chainId, params!));
+    expect(receipt!.success).toBe(true);
+    expect(receipt!.paymaster.toLowerCase()).toBe(b.paymasterAddress.toLowerCase());
+    // The paymaster paid: the Safe's balance did not move.
+    expect(await balanceOf(b, safe)).toBe(before);
+    const sends = b.requests.filter((request) => request.method === 'eth_sendUserOperation').length;
+    expect(await call('eth_sendUserOperation', [toRpcUserOperation(signed!), params!.entryPoint])).toEqual({ result: userOpHash });
+    expect(b.requests.filter((request) => request.method === 'eth_sendUserOperation').length).toBe(sends);
+  });
+
+  it('sends an unsponsored value transfer on A, paid by the Safe itself', async () => {
+    await rpc(a.rpcUrl, 'anvil_setBalance', [safe, '0x8AC7230489E80000']);
+    const recipient = privateKeyToAccount(generatePrivateKey()).address;
+    const value = 10n ** 16n;
+    const before = await balanceOf(a, safe);
+    const pmCalls = a.requests.filter((request) => request.method.startsWith('pm_')).length;
+    const { operation, receipt } = await sendThroughVault(a, { to: recipient, value: value.toString() });
+    expect(operation).toMatchObject({ sender: safe, paymaster: null, paymasterData: null });
+    expect(a.requests.filter((request) => request.method.startsWith('pm_')).length).toBe(pmCalls);
+    expect(receipt!.success).toBe(true);
+    expect(receipt!.paymaster).toBe('0x0000000000000000000000000000000000000000');
+    expect(await balanceOf(a, recipient)).toBe(value);
+    // The value and the network fee both came out of the Safe.
+    expect(await balanceOf(a, safe)).toBeLessThan(before - value);
+  });
+
+  it('refuses a transfer the Safe cannot pay for, before any upstream call', async () => {
+    await rpc(a.rpcUrl, 'anvil_setBalance', [safe, '0x0']);
+    const { prepared } = await sendThroughVault(a, { to: privateKeyToAccount(generatePrivateKey()).address, value: '1' });
+    expect(prepared).toEqual({ error: 'INSUFFICIENT_FUNDS' });
+  });
+
+  it('a call that reverts is included with success false, and the fee is still paid', async () => {
+    // The EntryPoint has no function for this selector: the Safe's call reverts inside the UserOperation.
+    const { receipt } = await sendThroughVault(b, { to: smartAccountFor(owner).entryPoint, value: '0', data: '0xdeadbeef' });
+    expect(receipt!.success).toBe(false);
+  });
+
+  it('a Safe that is not deployed gets NOT_DEPLOYED', async () => {
+    // Chain A's Safe is deployed; a fresh owner's Safe is not.
+    const other = generatePrivateKey();
+    const otherOwner = privateKeyToAccount(other).address;
+    const cookie = await openSession('bob');
+    await activeWallet(cookie, 'bob', otherOwner);
+    await setSessionChain(cookie, { chainId: a.chainId, rpcUrl: a.rpcUrl });
+    const response = await postAaRpc(req('/api/aa/rpc', { cookie, body: { method: 'vault_prepareTransaction', params: [{ to: otherOwner, value: '0' }] } }));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: 'NOT_DEPLOYED' });
   });
 });

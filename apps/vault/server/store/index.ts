@@ -95,3 +95,9 @@ export const prepareSponsoredDeployment: VaultStore['prepareSponsoredDeployment'
 export const claimSponsoredDeployment: VaultStore['claimSponsoredDeployment'] = async (...args) => (await getStore()).claimSponsoredDeployment(...args);
 export const completeSponsoredDeployment: VaultStore['completeSponsoredDeployment'] = async (...args) => (await getStore()).completeSponsoredDeployment(...args);
 export const releaseSponsoredDeployment: VaultStore['releaseSponsoredDeployment'] = async (...args) => (await getStore()).releaseSponsoredDeployment(...args);
+export const createPreparedTransaction: VaultStore['createPreparedTransaction'] = async (...args) => (await getStore()).createPreparedTransaction(...args);
+export const getPreparedTransaction: VaultStore['getPreparedTransaction'] = async (...args) => (await getStore()).getPreparedTransaction(...args);
+export const claimPreparedTransaction: VaultStore['claimPreparedTransaction'] = async (...args) => (await getStore()).claimPreparedTransaction(...args);
+export const completePreparedTransaction: VaultStore['completePreparedTransaction'] = async (...args) => (await getStore()).completePreparedTransaction(...args);
+export const releasePreparedTransaction: VaultStore['releasePreparedTransaction'] = async (...args) => (await getStore()).releasePreparedTransaction(...args);
+export const isSentTransaction: VaultStore['isSentTransaction'] = async (...args) => (await getStore()).isSentTransaction(...args);

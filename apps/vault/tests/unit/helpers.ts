@@ -40,7 +40,7 @@ export function makeServer(userId = USER) {
   const fetched: string[] = [];
   const posted: CreateSharesBody[] = [];
   const chain: { status: ChainStatus } = {
-    status: { chainId: CHAIN_ID, chainName: 'Local', nativeCurrency: 'ETH', rpcHost: '127.0.0.1:1', deployed: true, deployable: false, sponsored: true, bundler: true, balance: null },
+    status: { chainId: CHAIN_ID, chainName: 'Local', nativeCurrency: 'ETH', rpcHost: '127.0.0.1:1', deployed: true, deployable: false, sponsored: true, transactionsSponsored: false, bundler: true, balance: null },
   };
 
   const deps: SignerDeps = {

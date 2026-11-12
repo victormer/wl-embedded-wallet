@@ -50,7 +50,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ sub
   const { expectedAddress, smartAccount } = (await getActiveSet(sub))!.manifest;
   try {
     const status = await chainStatus({ chainId, rpcUrl: request.nextUrl.searchParams.get('rpcUrl') }, expectedAddress, smartAccount);
-    return json({ ...account, chainId, deployed: status.deployed, deployable: status.deployable, sponsored: status.sponsored });
+    return json({ ...account, chainId, deployed: status.deployed, deployable: status.deployable, sponsored: status.sponsored, transactionsSponsored: status.transactionsSponsored });
   } catch (error) {
     return json({ ...account, chainId, deployed: null, deployable: false, chainError: error instanceof ChainError ? error.code : 'CHAIN_UNAVAILABLE' });
   }

@@ -83,7 +83,7 @@ export function vaultEnv(dbPath: string, aaChains: unknown): Record<string, stri
     // defaults would throttle the suite itself. The limits themselves are tested by the unit and Postgres suites.
     RATE_LIMITS: JSON.stringify(
       Object.fromEntries(
-        ['handoff', 'share-a', 'recovery-challenge', 'recovery-assertion', 'relink-nonce', 'relink', 'aa', 's2s', 'enroll'].map((scope) => [scope, { ip: 100_000, sub: 100_000 }]),
+        ['handoff', 'share-a', 'recovery-challenge', 'recovery-assertion', 'relink-nonce', 'relink', 'aa', 'transaction', 's2s', 'enroll'].map((scope) => [scope, { ip: 100_000, sub: 100_000 }]),
       ),
     ),
   };

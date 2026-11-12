@@ -26,6 +26,15 @@ describe('rateLimitRule', () => {
     expect(rateLimitRule('relink', env)).toEqual({ windowMs: 60_000, ip: 10, sub: 5 });
   });
 
+  it('transaction: its own budget, smaller than aa, and overridable', () => {
+    expect(rateLimitRule('transaction', {})).toEqual({ windowMs: 60_000, ip: 30, sub: 10 });
+    const env = { RATE_LIMITS: JSON.stringify({ transaction: { sub: 3, windowSeconds: 600 }, aa: { sub: 1 } }) };
+    expect(rateLimitRule('transaction', env)).toEqual({ windowMs: 600_000, ip: 30, sub: 3 });
+    expect(rateLimitRule('aa', env)).toEqual({ windowMs: 60_000, ip: 240, sub: 1 });
+    expect(checkLimits({ RATE_LIMITS: JSON.stringify({ transaction: { ip: 5, sub: 2 } }) })).toEqual([]);
+    expect(checkLimits({ RATE_LIMITS: JSON.stringify({ transaction: { sub: 0 } }) })).toEqual([{ variable: 'RATE_LIMITS.transaction.sub', reason: 'must be a positive integer' }]);
+  });
+
   it('an invalid value falls back to the default', () => {
     expect(rateLimitRule('handoff', { RATE_LIMITS: '{not json' })).toEqual({ windowMs: 60_000, ip: 30, sub: 10 });
     expect(rateLimitRule('handoff', { RATE_LIMITS: '[1]' })).toEqual({ windowMs: 60_000, ip: 30, sub: 10 });

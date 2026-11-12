@@ -2,7 +2,7 @@
 import { aaChainsConfig, startAaStack } from './stack.mjs';
 
 const stack = await startAaStack([
-  { chainId: 31001, port: 21545, withContracts: true },
+  { chainId: 31001, port: 21545, withContracts: true, sponsorTransactions: true },
   { chainId: 31002, port: 21546, withContracts: true },
   { chainId: 31003, port: 21547, withContracts: false },
 ]);

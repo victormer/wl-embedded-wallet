@@ -38,9 +38,10 @@ export function CopyValue({
   copyLabel,
   href,
   hrefLabel,
+  hrefTestId,
   className,
   ...rest
-}: { value: string; copyLabel: string; href?: string | null; hrefLabel?: string } & HTMLAttributes<HTMLSpanElement>) {
+}: { value: string; copyLabel: string; href?: string | null; hrefLabel?: string; hrefTestId?: string } & HTMLAttributes<HTMLSpanElement>) {
   return (
     <div className={className ? `copy-value ${className}` : 'copy-value'}>
       <span className="mono copy-value-text" {...rest}>
@@ -49,7 +50,7 @@ export function CopyValue({
       <span className="copy-value-tools">
         <CopyButton value={value} label={copyLabel} />
         {href && (
-          <a className="copy-button" href={href} target="_blank" rel="noopener noreferrer" aria-label={hrefLabel} title={hrefLabel}>
+          <a className="copy-button" href={href} target="_blank" rel="noopener noreferrer" aria-label={hrefLabel} title={hrefLabel} data-testid={hrefTestId}>
             <ExternalLink size={14} />
           </a>
         )}

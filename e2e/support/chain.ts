@@ -17,6 +17,16 @@ export function balanceOf(chainId: number, address: `0x${string}`): Promise<bigi
   return client(chainId).getBalance({ address });
 }
 
+/** `success` or `reverted`, from the node itself. */
+export async function transactionStatus(chainId: number, hash: `0x${string}`): Promise<string> {
+  return (await client(chainId).getTransactionReceipt({ hash })).status;
+}
+
+/** Sets the native balance of an address on a local anvil chain. */
+export async function setBalance(chainId: number, address: `0x${string}`, wei: bigint): Promise<void> {
+  await client(chainId).request({ method: 'anvil_setBalance' as never, params: [address, `0x${wei.toString(16)}`] as never });
+}
+
 export function paymasterDeposit(chainId: number): Promise<bigint> {
   const state = runState();
   return client(chainId).readContract({

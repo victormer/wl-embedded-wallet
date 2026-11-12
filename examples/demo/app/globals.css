@@ -791,6 +791,81 @@ a.copy-button:hover {
   outline-offset: -2px;
 }
 
+/* Operation tabs on the wallet page: the line tabs head the panel, and each tab's sections follow, split by rules. */
+.op-tabs .tabs-line {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.op-tabs .tabs-line button {
+  flex: none;
+  white-space: nowrap;
+}
+
+.tab-panel:focus-visible {
+  outline-offset: -2px;
+}
+
+.op-section + .op-section {
+  border-top: 1px solid var(--line);
+}
+
+.op-intro {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.op-intro .chip {
+  margin-top: 1px;
+}
+
+.op-form {
+  display: grid;
+  gap: 12px;
+}
+
+/* Side-by-side fields of different heights (one has a hint) keep their inputs on the same line. */
+.op-form .field {
+  align-content: start;
+}
+
+.input-affix {
+  position: relative;
+  display: block;
+}
+
+.input-affix .input {
+  padding-right: 56px;
+}
+
+.input-suffix {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  max-width: 44px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.fee-line {
+  align-items: flex-start;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.fee-line .sq {
+  margin-top: 4px;
+}
+
 /* ---------- Skeleton and empty state ---------- */
 
 .skeleton-stack {

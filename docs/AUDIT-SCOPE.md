@@ -11,10 +11,11 @@ Start with [ARCHITECTURE.md](ARCHITECTURE.md) for the components, [CRYPTO-SPEC.m
 3. Are the cryptographic constructions (AES-256-GCM with HKDF or Argon2id, PRF salt, AADs, Ed25519 manifest, Shamir via wdk-utils) used correctly, with adequate parameters and domain separation?
 4. Can code on the integrator origin, or a different integrator, obtain anything beyond addresses and signatures the user approved?
 5. Can a handoff token, a session, or a relink be abused beyond the accepted risks?
-6. Can the paymaster sponsorship be spent on anything other than deploying a user's own Safe, or beyond the configured caps and once per Safe and chain?
-7. Do the rate limits, the body cap and the share A release budgets hold, across replicas, behind a proxy and on Vercel, and can a client choose the address it is counted under?
-8. Is the offline tool genuinely network-free and reproducible, and does it recover correctly?
-9. Do the CSP, Trusted Types and response headers hold on the vault, the static recovery page and the offline tool?
+6. Can the paymaster sponsorship be spent on anything other than deploying a user's own Safe (once per Safe and chain) and, where `sponsorTransactions` is on, on calls the user approved from their own deployed Safe, or beyond the configured caps and rate limits?
+7. Can a transaction be sent that executes anything other than the single call the user reviewed (a different call, a delegatecall, a batch, a call to the Safe with data), or be sent more than once?
+8. Do the rate limits, the body cap and the share A release budgets hold, across replicas, behind a proxy and on Vercel, and can a client choose the address it is counted under?
+9. Is the offline tool genuinely network-free and reproducible, and does it recover correctly?
+10. Do the CSP, Trusted Types and response headers hold on the vault, the static recovery page and the offline tool?
 
 ## Priority 1: cryptographic core (`packages/core/src`)
 
@@ -22,20 +23,20 @@ Pure TypeScript, no network, no storage, no UI. Every format and every decision 
 
 | File | Lines | What to look at |
 |---|---|---|
-| `signer.ts` | ~380 | The worker request handler: every operation (`enroll`, `recover`, `sign`, `deploy`, `export`, `sign-recovered`, `export-recovered`, `sign-relink`, `upgrade-kit`), verification order, what each response may carry (only `export` and `export-recovered` return the mnemonic), buffer wiping, error mapping |
+| `signer.ts` | ~405 | The worker request handler: every operation (`enroll`, `recover`, `sign`, `deploy`, `send-transaction`, `export`, `sign-recovered`, `export-recovered`, `sign-relink`, `upgrade-kit`), verification order, what each response may carry (only `export` and `export-recovered` return the mnemonic), buffer wiping, error mapping |
 | `envelope.ts` | ~125 | AAD construction, expected-slot rule, salt and IV sizes, HKDF for share B, error uniformity |
 | `recovery-code.ts` | ~150 | Code generation (128 bits, Crockford base32), normalization, Argon2id derivation, parameter bounds from untrusted envelopes |
 | `seed-backup.ts` | ~70 | Separate label, owner-bound AAD, strict shape, seal-then-reopen |
 | `manifest.ts` | ~115 | Canonical JSON, Ed25519 sign and verify (`zip215: false`), format and Safe recomputation checks, digests, address comparison |
 | `shamir.ts` | ~70 | `verifyRecovery` and `recoverMnemonic` wrappers around wdk-utils; authentication of every share before combining |
 | `kit.ts`, `schema.ts` | ~60, ~50 | Kit `v: 1` and `v: 2` parse rules, shape checks and their limits |
-| `safe.ts` | ~285 | Safe parameters, address prediction, deployment operation and `isDeploymentOperation`, `userOperationMatches`, SafeOp and SafeMessage hashing and signer recovery |
-| `sign-request.ts` | ~115 | Validation of untrusted signing requests from the app: sizes, key allowlists, quantities, typed data through viem |
+| `safe.ts` | ~335 | Safe parameters, address prediction, deployment operation and `isDeploymentOperation`, transaction operation, `isTransactionOperation` and `isAllowedTransactionCall`, `userOperationMatches`, SafeOp and SafeMessage hashing and signer recovery |
+| `sign-request.ts` | ~120 | Validation of untrusted signing and transaction requests from the app (`parseSignRequest`, `parseVaultCall`): sizes, key allowlists, quantities, typed data through viem |
 | `relink.ts` | ~40 | Relink EIP-712 domain and types |
 | `prf.ts` | ~17 | PRF salt and per-set user handle |
 | `offline.ts` | ~70 | Kit + code recovery used by the offline tool: owner and Safe checks before returning the seed |
 | `encoding.ts` | ~60 | Canonical base64url, hex, randomness, best-effort zeroing |
-| `types.ts`, `errors.ts`, `operations.ts` | ~295, ~40, ~50 | Request and response types; `secretBuffersOf` decides which buffers are transferred and wiped |
+| `types.ts`, `errors.ts`, `operations.ts` | ~315, ~40, ~50 | Request and response types; `secretBuffersOf` decides which buffers are transferred and wiped |
 
 Tests: `packages/core/tests/*.test.ts`, and the vault's crypto-level unit tests (`apps/vault/tests/unit/envelope.test.ts`, `prf.test.ts`, `seed-backup.test.ts`, `recovery.test.ts`, `sign.test.ts`, `export.test.ts`, `no-leak.test.ts`).
 
@@ -46,7 +47,8 @@ Tests: `packages/core/tests/*.test.ts`, and the vault's crypto-level unit tests 
 | Worker entry and client | `lib/signer.worker.ts` (~65), `lib/signer-client.ts` (~40) | One worker per operation, transferables, which server calls the worker makes, `X-Vault-App-Origin` |
 | `postMessage` channel | `lib/vault-channel.ts` (~130), `app/_components/vault-gate.tsx` (~70) | `ready` with `'*'`, acceptance only from `window.opener`, first request only, origin verification before data results, `renew()` |
 | WebAuthn | `lib/prf.ts` (~195) | Creation and assertion options, PRF output handling, field-by-field registration JSON (no PRF output to the server), discoverable assertion for kit-free recovery |
-| API client and deployment | `lib/vault-api.ts` (~155), `lib/aa-client.ts` (~60) | Token redemption request, origin confirmation, prepare and send of the server-built deployment, prefund check, which server codes reach the app |
+| API client, deployment and transactions | `lib/vault-api.ts` (~155), `lib/aa-client.ts` (~125), `lib/error-text.ts` (~105) | Token redemption request, origin confirmation, prepare and send of the server-built deployment and transactions, prefund check, the sponsorship consistency check, receipt polling and its 3-minute timeout, the mapping of bundler and paymaster messages to codes (`upstreamErrorCode`), which server codes reach the app |
+| Transaction review | `app/transaction/*` (`transaction-flow.tsx` ~205), `app/_components/transaction-review.tsx` (~115) | Call parsing before anything is shown, prepare before the passkey, what the review displays (recipient, amount, raw data, ERC-20 `transfer`/`approve` decoding and cautions, sponsorship or maximum network fee) against what the worker signs, what is posted back on revert or timeout |
 | Flows | `app/activate`, `app/sign`, `app/deploy`, `app/unlock`, `app/recover`, `app/export`, `app/relink`, `app/_components/enroll-steps.tsx`, `recovery-forms.tsx`, `recovered-panel.tsx`, `kit-upgrade.tsx`, `export-panel.tsx`, `sign-review.tsx`, `recovery-tool.tsx` | Drill before activation, tool before kit, review before passkey, what each flow posts back to the app, kit `rpId` check, relink challenge checks |
 | Downloads | `lib/seed-file.ts`, `lib/recovery-tool.ts` | Seed file contents and name, tool fetch acceptance rule |
 | Page bootstrap | `app/layout.tsx` (~55), `lib/runtime-config.ts` | Trusted Types `default` policy, runtime delivery of RP ID and manifest public key |
@@ -62,18 +64,18 @@ Tests: `packages/core/tests/*.test.ts`, and the vault's crypto-level unit tests 
 | Share routes | `app/api/shares/route.ts` (~145), `app/api/shares/a/route.ts` (~65), `app/api/shares/exported/route.ts` | Enrollment validation order, owner uniqueness, Safe parameter checks, manifest signing, activation and revocation, share A release (pending sets only to the creating session, budgets before lookup, audit row before release) |
 | WebAuthn server | `server/webauthn.ts` (~100), `app/api/webauthn/challenge`, `app/api/recovery/passkey/**` | Registration and assertion verification, challenge spending, counter compare-and-set, kit-free recovery response |
 | Relink | `app/api/relink/nonce/route.ts`, `app/api/relink/route.ts`, store `relinkWallet` | Non-enumerating nonce issuance, typed data rebuilt server-side, transaction checks, session invalidation, audit row |
-| Chains and AA proxy | `server/chains.ts` (~190), `server/safe-check.ts`, `server/sponsorship.ts` (~375), `app/api/aa/status/route.ts`, `app/api/aa/rpc/route.ts` (~90) | RPC URL resolution and allowlist, chain id check, three-method allowlist, the server-built deployment (fees, with the bundler's `pimlico_getUserOperationGasPrice` quote as a floor bounded by the cap, gas margin and caps, paymaster result validation), the comparison of the sent operation with the prepared one, the owner signature check, the `sponsored_deployments` state machine (single flight, release on failure, retry window), receipt restriction, sponsorship context, response limits |
+| Chains and AA proxy | `server/chains.ts` (~200), `server/safe-check.ts`, `server/sponsorship.ts` (~390), `server/transactions.ts` (~275), `app/api/aa/status/route.ts`, `app/api/aa/rpc/route.ts` (~115) | RPC URL resolution and allowlist, chain id check, four-method allowlist, the server-built deployment (fees, with the bundler's `pimlico_getUserOperationGasPrice` quote as a floor bounded by the cap, gas margin and caps, paymaster result validation), the comparison of the sent operation with the prepared one, the owner signature check, the `sponsored_deployments` state machine (single flight, release on failure, retry window), receipt restriction, sponsorship context, response limits. For transactions (`vault_prepareTransaction` and `eth_sendUserOperation` without `factory`): the deployed and self-call checks, the balance check before any upstream call, nonce and call encoding, sponsorship only with `sponsorTransactions`, the prefund check, the hash-keyed lookup and byte-for-byte comparison, owner signature, TTL, the `prepared_transactions` claim and release, the `transaction` rate-limit scope |
 | s2s | `app/api/s2s/accounts/[sub]/route.ts` (~55) | Rate limits before and after the bearer check, bearer token comparison, `sub` and `chainId` validation before any lookup, response contents |
-| Configuration | `server/config.ts` (~250), `server/limits.ts`, `server/startup.ts`, `instrumentation.ts` | Startup validation, RP ID vs origin, insecure local mode, limit and sponsorship variables, `sslmode` required on Vercel |
-| Stores | `server/store/*` (`sql-store.ts` ~480, `postgres.ts`, `postgres-url.ts` (the `sslmode` and `channel_binding` rewriting), `sqlite.ts`, `migrate.ts`, `migrations/*`) | Atomicity of single-use operations, rate-limit counters and sponsored deployment claims, locking, the one-active-set invariant, migrations (006 adds `rate_limits`, `share_a_releases`, `sponsored_deployments`) |
+| Configuration | `server/config.ts` (~255), `server/limits.ts`, `server/startup.ts`, `instrumentation.ts` | Startup validation, RP ID vs origin, insecure local mode, limit and sponsorship variables (including `sponsorTransactions`), `sslmode` required on Vercel |
+| Stores | `server/store/*` (`sql-store.ts` ~570, `postgres.ts`, `postgres-url.ts` (the `sslmode` and `channel_binding` rewriting), `sqlite.ts`, `migrate.ts`, `migrations/*`) | Atomicity of single-use operations, rate-limit counters, sponsored deployment and prepared transaction claims, locking, the one-active-set invariant, migrations (006 adds `rate_limits`, `share_a_releases`, `sponsored_deployments`; 007 adds `prepared_transactions`) |
 | Brand | `server/brand.ts` (~715), `app/brand/[file]/route.ts` | Validation of operator-supplied JSON, SVG and fonts; serving headers. Lower priority: the operator is trusted, but the code parses files |
 
 ## Priority 4: SDK (`packages/sdk/src`)
 
 | File | Lines | What to look at |
 |---|---|---|
-| `client/index.ts` | ~300 | Popup opening, message origin and source checks, `targetOrigin`, supersede and close handling, per-action result validation (`PROTOCOL_ERROR`), `timeoutMs` |
-| `protocol.ts` | ~55 | Wire types and constants |
+| `client/index.ts` | ~355 | Popup opening, message origin and source checks, `targetOrigin`, supersede and close handling, per-action result validation (`PROTOCOL_ERROR`), `timeoutMs`, `sendTransaction` request validation before the popup opens (`INVALID_REQUEST`) |
+| `protocol.ts` | ~60 | Wire types and constants |
 | `server/handoff.ts`, `server/signer.ts` | ~110, ~100 | Token minting (claims, lifetime, `jti`), EdDSA, ES256 and RS256 signers, public JWK export |
 | `server/jwks.ts` | ~40 | JWKS response and handler, private-key rejection (500 `INTERNAL` from the handler) |
 | `server/service-client.ts` | ~75 | s2s client, `vaultOrigin` normalization |
